@@ -1,8 +1,14 @@
 // ==========================================
-// GLOBAL STATE & MAP HANDLES
+// 1. GLOBAL STATE INITIALIZATION
 // ==========================================
 let records = JSON.parse(localStorage.getItem('structuralRecords') || '[]');
 let activeProjectId = localStorage.getItem('activeProjectId') || 'PROJ-001';
+let projects = JSON.parse(localStorage.getItem('projectList') || '["PROJ-001"]');
+
+if (!projects.includes(activeProjectId)) {
+  projects.push(activeProjectId);
+  localStorage.setItem('projectList', JSON.stringify(projects));
+}
 
 let mapInstance = null;
 let mapDataGroup = null;
@@ -12,28 +18,42 @@ let kmlMapOverlayLayer = null;
 let customOverlayLayer = null;
 let currentOverlayUrl = null;
 
-const ids = ['locNo', 'strike', 'dip', 'type', 'trend', 'plunge', 'lith', 'unit', 'remarks'];
+// GPS Track Recording State
+let isTracking = false;
+let trackWatchId = null;
+let gpsTrackPoints = JSON.parse(localStorage.getItem('gpsTraverseTrack') || '[]');
+let gpsTrackPolyline = null;
+
+// Countdown State
+let deleteCountdownVal = 50;
+let deleteTimerInterval = null;
+let recordsPendingDeletion = [];
+
+const ids = [
+  'date', 'locPrefix', 'locNo', 'loc', 'lat', 'lon', 'alt', 'accuracy', 'lith',
+  'mineralization', 'alteration', 'unit', 'type', 'customStructure', 'strike', 'dip',
+  'dipdir', 'trend', 'plunge', 'sense', 'movementDir', 'photo', 'sampleType',
+  'samplePrefix', 'sample', 'remarks', 'linType', 'linRake', 'pitchFrom', 'linTrend', 'linPlunge'
+];
 
 // ==========================================
-// 1. CORE GEOLOGICAL HELPERS
+// 2. CORE GEOLOGICAL & FORMATTING UTILITIES
 // ==========================================
 function isLinear(typeStr) {
   const t = (typeStr || '').toLowerCase();
-  return t.includes('lineation') || t.includes('fold') || t.includes('axis') || t.includes('striae') || t.includes('slickenside');
+  return t.includes('lineation') || t.includes('fold') || t.includes('axis') || t.includes('striae') || t.includes('slickenside') || t.includes('chatter');
 }
 
-function getQuadrant(azimuth) {
-  const az = (parseFloat(azimuth) % 360 + 360) % 360;
-  if (isNaN(az)) return '';
-  if (az >= 337.5 || az < 22.5) return 'N';
-  if (az >= 22.5 && az < 67.5) return 'NE';
-  if (az >= 67.5 && az < 112.5) return 'E';
-  if (az >= 112.5 && az < 157.5) return 'SE';
-  if (az >= 157.5 && az < 202.5) return 'S';
-  if (az >= 202.5 && az < 247.5) return 'SW';
-  if (az >= 247.5 && az < 292.5) return 'W';
-  if (az >= 292.5 && az < 337.5) return 'NW';
-  return '';
+function pad3(n) {
+  if (n === '' || n === null || isNaN(n)) return '000';
+  let x = ((Number(n) % 360) + 360) % 360;
+  return String(Math.round(x)).padStart(3, '0');
+}
+
+function getQuadrant(deg) {
+  if (isNaN(deg)) return '';
+  const sectors = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return sectors[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
 }
 
 function escapeHTML(str) {
@@ -51,248 +71,334 @@ function val(id) {
   return el ? el.value.trim() : '';
 }
 
-// Helper to get vector toggle checkbox dynamically
-function getVectorToggleElement() {
-  return document.getElementById('showVectors') ||
-         document.getElementById('toggleVectors') ||
-         document.querySelector('input[type="checkbox"][id*="ector"]') ||
-         document.querySelector('input[type="checkbox"][id*="Vector"]');
+function persist() {
+  localStorage.setItem('structuralRecords', JSON.stringify(records));
 }
 
 // ==========================================
-// 2. STRUCTURAL PREVIEW & CALCULATION UTILITIES
+// 3. PROJECT MANAGER
 // ==========================================
-function updatePreview() {
-  const previewEl = document.getElementById('preview');
-  if (!previewEl) return;
+function renderProjectDropdown() {
+  const select = document.getElementById('projectIdSelect');
+  if (!select) return;
+  select.innerHTML = projects.map(p =>
+    `<option value="${p}" ${p === activeProjectId ? 'selected' : ''}>${p}</option>`
+  ).join('');
+}
 
-  const structType = val('type');
-  if (isLinear(structType)) {
-    const trend = val('trend');
-    const plunge = val('plunge');
-    previewEl.value = (trend && plunge) ? `${plunge}° → ${trend.padStart(3, '0')}° (${getQuadrant(trend)})` : '';
-  } else {
-    const strike = val('strike');
-    const dip = val('dip');
-    if (strike && dip) {
-      const dd = (parseInt(strike, 10) + 90) % 360;
-      previewEl.value = `${strike.padStart(3, '0')}°/${dip.padStart(2, '0')}° (Dip Dir: ${dd.toString().padStart(3, '0')}° ${getQuadrant(dd)})`;
-    } else {
-      previewEl.value = '';
+function switchProject() {
+  const select = document.getElementById('projectIdSelect');
+  if (!select) return;
+  activeProjectId = select.value;
+  localStorage.setItem('activeProjectId', activeProjectId);
+  render();
+  updatePreview();
+}
+
+function createNewProject() {
+  const newId = prompt("Enter New Project ID (e.g. JAUNSAR-2026):");
+  if (newId && newId.trim()) {
+    const cleanId = newId.trim().toUpperCase().replace(/\s+/g, '-');
+    if (!projects.includes(cleanId)) {
+      projects.push(cleanId);
+      localStorage.setItem('projectList', JSON.stringify(projects));
     }
+    activeProjectId = cleanId;
+    localStorage.setItem('activeProjectId', activeProjectId);
+    renderProjectDropdown();
+    render();
   }
 }
 
-function updatePitchFromOptions() {
-  // Optional helper to adjust pitch calculations relative to strike inputs
+// ==========================================
+// 4. PREVIEW & STRUCTURAL CALCULATIONS
+// ==========================================
+function fmt() {
+  let t = val('type');
+  if (t === 'Other' && val('customStructure')) t = val('customStructure');
+  const se = val('sense'), md = val('movementDir');
+  let dataStr = '';
+
+  if (isLinear(val('type'))) {
+    const tr = val('trend') ? pad3(val('trend')) + '°' : '---°';
+    const pl = val('plunge') ? val('plunge') + '°' : '--°';
+    dataStr = `${pl} → ${tr} (${getQuadrant(parseFloat(val('trend')))})`;
+  } else {
+    const st = val('strike') ? pad3(val('strike')) : '000';
+    const dp = val('dip') ? val('dip') + '°' : '--°';
+    const dd = val('strike') ? pad3((parseInt(val('strike'), 10) + 90) % 360) : '000';
+    const quad = val('strike') ? getQuadrant(parseInt(dd, 10)) : '';
+    dataStr = `${st}°/${dp} (DD: ${dd}° ${quad})`.trim();
+  }
+
+  let s = `${t}: ${dataStr}`;
+  if (val('linType') && val('linTrend') && val('linPlunge')) {
+    s += ` | ${val('linType')}: ${val('linPlunge')} → ${val('linTrend')} (Pitch ${val('linRake')}°)`;
+  }
+  if (se) s += `, ${se} sense`;
+  if (md) s += ` (${md})`;
+  return s;
+}
+
+function updatePreview() {
+  const previewEl = document.getElementById('preview');
+  if (previewEl) previewEl.innerHTML = `<span class="fmt-preview">${fmt()}</span>`;
+}
+
+function toggleLineationSection() {
+  const panel = document.getElementById('associatedLineationDiv');
+  const btn = document.getElementById('toggleLineationBtn');
+  if (!panel || !btn) return;
+  const isHidden = panel.classList.contains('hidden');
+  if (isHidden) {
+    panel.classList.remove('hidden');
+    btn.innerHTML = '➖ Remove Lineation (Pitch)';
+    calculateLineationFromPitch();
+  } else {
+    panel.classList.add('hidden');
+    btn.innerHTML = '➕ Associated Lineation (Pitch / Rake)';
+    ['linType', 'linRake', 'linTrend', 'linPlunge'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    updatePreview();
+  }
 }
 
 function calculateLineationFromPitch() {
   const strike = parseFloat(val('strike'));
   const dip = parseFloat(val('dip'));
-  const rake = parseFloat(val('pitchRake'));
-  const pitchFrom = val('pitchFrom'); // 'strike' or 'opposite'
+  const rake = parseFloat(val('linRake'));
+  const pitchFrom = val('pitchFrom');
 
-  if (isNaN(strike) || isNaN(dip) || isNaN(rake)) return;
+  const trendInput = document.getElementById('linTrend');
+  const plungeInput = document.getElementById('linPlunge');
+  if (!trendInput || !plungeInput) return;
 
-  const dipRad = (dip * Math.PI) / 180;
-  const rakeRad = (rake * Math.PI) / 180;
+  if (isNaN(strike) || isNaN(dip) || isNaN(rake) || rake < 0 || rake > 90) {
+    trendInput.value = '';
+    plungeInput.value = '';
+    updatePreview();
+    return;
+  }
 
-  // True plunge calculation: sin(plunge) = sin(dip) * sin(rake)
-  const sinPlunge = Math.sin(dipRad) * Math.sin(rakeRad);
+  const radDip = (dip * Math.PI) / 180;
+  const radRake = (rake * Math.PI) / 180;
+
+  const sinPlunge = Math.sin(radDip) * Math.sin(radRake);
   const plungeDeg = Math.round((Math.asin(sinPlunge) * 180) / Math.PI);
 
-  // Apparent angle along strike plane: cos(beta) = cos(rake) / cos(plunge)
   const cosPlunge = Math.cos((plungeDeg * Math.PI) / 180);
-  const betaDeg = cosPlunge !== 0 ? (Math.acos(Math.cos(rakeRad) / cosPlunge) * 180) / Math.PI : 0;
+  const betaDeg = cosPlunge !== 0 ? (Math.acos(Math.cos(radRake) / cosPlunge) * 180) / Math.PI : 0;
 
   let trendDeg = (pitchFrom === 'opposite')
     ? (strike + 180 - betaDeg + 360) % 360
     : (strike + betaDeg + 360) % 360;
 
   trendDeg = Math.round(trendDeg);
-
-  const trendEl = document.getElementById('trend');
-  const plungeEl = document.getElementById('plunge');
-  if (trendEl) trendEl.value = trendDeg.toString().padStart(3, '0');
-  if (plungeEl) plungeEl.value = plungeDeg.toString().padStart(2, '0');
-
+  trendInput.value = pad3(trendDeg) + '°';
+  plungeInput.value = String(plungeDeg).padStart(2, '0') + '°';
   updatePreview();
 }
 
 // ==========================================
-// 3. COUNTER & LOCATION IDENTIFIER UTILITIES
+// 5. GPS SYNCHRONIZATION ENGINE
 // ==========================================
-function handleLocModeChange() {
-  const modeEl = document.getElementById('locCountMode');
-  const locNoInput = document.getElementById('locNo');
-  if (!modeEl || !locNoInput) return;
+function getGPS() {
+  const latField = document.getElementById('lat');
+  const lonField = document.getElementById('lon');
+  const accField = document.getElementById('accuracy');
+  const altField = document.getElementById('alt');
 
-  const mode = modeEl.value;
-
-  if (mode === 'manual') {
-    if (confirm("Do you really want to manually enter the location number?")) {
-      locNoInput.readOnly = false;
-      locNoInput.focus();
-      locNoInput.select();
-    } else {
-      modeEl.value = 'continue';
-    }
-  } else if (mode === 'reset') {
-    if (confirm("Do you really want to reset the counter to 0?")) {
-      locNoInput.readOnly = true;
-      localStorage.setItem('locationCounter', '0');
-      updateLocationID();
-    } else {
-      modeEl.value = 'continue';
-    }
-  } else {
-    locNoInput.readOnly = true;
-    if (records.length > 0) {
-      const latestRecord = records.reduce((latest, current) => (current.id > latest.id ? current : latest), records[0]);
-      const lastLocStr = latestRecord.locNo ? String(latestRecord.locNo) : '';
-      const matches = lastLocStr.match(/\d+$/);
-      const lastNum = matches ? parseInt(matches[0], 10) : NaN;
-      localStorage.setItem('locationCounter', isNaN(lastNum) ? 1 : lastNum + 1);
-    } else {
-      localStorage.setItem('locationCounter', '1');
-    }
-    updateLocationID();
-  }
-}
-
-function updateLocationID() {
-  const modeEl = document.getElementById('locCountMode');
-  const locNoEl = document.getElementById('locNo');
-  if (!modeEl || !locNoEl) return;
-
-  if (modeEl.value !== 'manual') {
-    const prefix = document.getElementById('locPrefix')?.value || 'JU';
-    const num = parseInt(localStorage.getItem('locationCounter') || '1', 10);
-    locNoEl.value = prefix + '-' + String(num).padStart(3, '0');
-  }
-}
-
-function toggleSampleState() {
-  const takeSampleEl = document.getElementById('takeSample');
-  if (!takeSampleEl) return;
-
-  const isChecked = takeSampleEl.checked;
-  const sampleType = document.getElementById('sampleType');
-  const samplePrefix = document.getElementById('samplePrefix');
-  const sampleCounterBtn = document.getElementById('sampleCounterBtn');
-
-  if (sampleType) sampleType.disabled = !isChecked;
-  if (samplePrefix) samplePrefix.disabled = !isChecked;
-  if (sampleCounterBtn) sampleCounterBtn.disabled = !isChecked;
-  updateSampleID();
-}
-
-function updateSampleID() {
-  const takeSampleEl = document.getElementById('takeSample');
-  const sampleInput = document.getElementById('sample');
-  if (!takeSampleEl || !sampleInput) return;
-
-  if (takeSampleEl.checked) {
-    const prefix = document.getElementById('samplePrefix')?.value || 'DD';
-    const num = parseInt(localStorage.getItem('sampleCounter') || '1', 10);
-    sampleInput.value = prefix + '-' + String(num).padStart(3, '0');
-  } else {
-    sampleInput.value = 'No Sample Collected';
-  }
-}
-
-function setSampleCounter() {
-  const userInput = prompt("Enter the next starting sample number sequence (e.g., 2 for 002, 5 for 005):");
-  if (userInput === null) return;
-
-  const parsedNum = parseInt(userInput.replace(/^\D+/g, ''), 10);
-  if (isNaN(parsedNum) || parsedNum < 0) {
-    alert("Please enter a valid numeric value (0 or higher).");
+  if (!navigator.geolocation) {
+    alert('Geolocation is unsupported by your browser/device.');
     return;
   }
 
-  localStorage.setItem('sampleCounter', parsedNum);
-  updateSampleID();
+  if (latField) latField.value = 'Syncing...';
+  if (lonField) lonField.value = 'Syncing...';
+  if (accField) accField.value = '...';
+
+  navigator.geolocation.getCurrentPosition(
+    p => {
+      if (latField) latField.value = p.coords.latitude.toFixed(6);
+      if (lonField) lonField.value = p.coords.longitude.toFixed(6);
+      if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
+      if (altField) altField.value = p.coords.altitude ? p.coords.altitude.toFixed(1) : 'N/A';
+    },
+    err => {
+      if (latField) latField.value = '';
+      if (lonField) lonField.value = '';
+      if (accField) accField.value = 'Error';
+      alert('GPS Signal Lock Failed: ' + err.message);
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
+}
+
+// ==========================================
+// 6. RECORD LOGGING & MANAGEMENT
+// ==========================================
+function saveEntry() {
+  const r = {
+    id: Date.now(),
+    projectId: activeProjectId,
+    formatted: fmt(),
+    showOnMap: true,
+    selectedForDelete: false
+  };
+
+  ids.forEach(id => r[id] = val(id));
+
+  const sampleCheckbox = document.getElementById('takeSample');
+  if (!sampleCheckbox || !sampleCheckbox.checked) {
+    r['sample'] = '';
+    r['sampleType'] = '';
+  } else {
+    let sCounter = parseInt(localStorage.getItem('sampleCounter') || '1', 10);
+    localStorage.setItem('sampleCounter', sCounter + 1);
+  }
+
+  records.unshift(r);
+
+  // Increment Location Counter
+  const locMode = document.getElementById('locCountMode')?.value || 'continue';
+  let lCounter = parseInt(localStorage.getItem('locationCounter') || '1', 10);
+  if (locMode === 'continue') {
+    localStorage.setItem('locationCounter', lCounter + 1);
+  }
+
+  persist();
+  clearForm(false);
+  updateLocationID();
+  render();
+  alert('Station record saved successfully!');
+}
+
+function clearForm(resetDate = true) {
+  const retainKeys = resetDate ? [] : ['loc', 'lith', 'unit', 'lat', 'lon', 'alt', 'accuracy'];
+  ids.forEach(id => {
+    if (!retainKeys.includes(id) && id !== 'locPrefix' && id !== 'samplePrefix' && id !== 'locNo' && id !== 'type') {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    }
+  });
+
+  const takeSampleEl = document.getElementById('takeSample');
+  if (takeSampleEl) {
+    takeSampleEl.checked = false;
+    toggleSampleState();
+  }
   updatePreview();
-  alert(`Sample tracking updated! The next saved entry will use sequence number: ${parsedNum}`);
+}
+
+function render() {
+  const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
+  const countEl = document.getElementById('count');
+  if (countEl) countEl.textContent = projectRecords.length;
+
+  const listEl = document.getElementById('list');
+  if (!listEl) return;
+
+  listEl.innerHTML = projectRecords.map(r => `
+    <div class="entry">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <label style="font-weight:bold; font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" onchange="toggleRecordSelection(${r.id}, this.checked)" ${r.selectedForDelete ? 'checked' : ''}>
+          <span>Station: <b>${escapeHTML(r.locNo || 'N/A')}</b></span>
+        </label>
+        <label style="font-size:11px; background:#eef2f5; padding:2px 8px; border-radius:4px; cursor:pointer;">
+          <input type="checkbox" onchange="toggleMapRecord(${r.id}, this.checked)" ${r.showOnMap !== false ? 'checked' : ''}>
+          Map
+        </label>
+      </div>
+      <div style="font-size:13px; font-weight:bold; color:var(--primary);">${escapeHTML(r.formatted || '')}</div>
+      <div style="font-size:12px; color:#555; margin-top:2px;">
+        ${r.unit ? `Formation: ${escapeHTML(r.unit)} | ` : ''}${r.lith ? `Lithology: ${escapeHTML(r.lith)}` : ''}
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+        Coord: ${r.lat || '-'}, ${r.lon || '-'} | Sample: <b>${escapeHTML(r.sample || 'None')}</b>
+      </div>
+    </div>
+  `).join('');
+
+  updateMapDisplay();
+}
+
+function toggleRecordSelection(id, isSelected) {
+  const rec = records.find(r => r.id === id);
+  if (rec) {
+    rec.selectedForDelete = isSelected;
+    persist();
+  }
 }
 
 // ==========================================
-// 4. DYNAMIC SVG SYMBOL GENERATORS FOR LEAFLET
+// 7. 50-SECOND SAFE DELETION SYSTEM
 // ==========================================
-function getPlanarSvgIcon(strike, dip, type) {
-  const strikeDeg = parseFloat(strike) || 0;
-  const dipVal = (dip !== undefined && dip !== '') ? dip : '';
-  const structColor = getStructureColor(type);
+function initiateDeleteSelected() {
+  recordsPendingDeletion = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId && r.selectedForDelete);
+  
+  if (recordsPendingDeletion.length === 0) {
+    alert("No records selected! Check the box next to any station you wish to delete.");
+    return;
+  }
 
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-      <g transform="rotate(${strikeDeg}, 20, 20)">
-        <line x1="6" y1="20" x2="34" y2="20" stroke="${structColor}" stroke-width="3" stroke-linecap="round" />
-        <line x1="20" y1="20" x2="20" y2="28" stroke="${structColor}" stroke-width="2.5" stroke-linecap="round" />
-        <circle cx="20" cy="20" r="2" fill="${structColor}" />
-      </g>
-      <text x="24" y="14" font-size="11" font-weight="bold" fill="${structColor}" font-family="monospace">${dipVal}</text>
-    </svg>
-  `;
+  const countDisplay = document.getElementById('deleteSelectedCount');
+  if (countDisplay) countDisplay.textContent = recordsPendingDeletion.length;
 
-  return L.divIcon({
-    html: svg,
-    className: 'geo-svg-marker',
-    iconSize: [40, 40],
-    iconAnchor: [20, 20],
-    popupAnchor: [0, -10]
-  });
+  deleteCountdownVal = 50;
+  const timerDisplay = document.getElementById('deleteCountdownTimer');
+  const confirmBtn = document.getElementById('confirmDeleteBtn');
+  
+  if (timerDisplay) timerDisplay.textContent = `${deleteCountdownVal}s`;
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.style.opacity = '0.5';
+    confirmBtn.style.cursor = 'not-allowed';
+  }
+
+  const modal = document.getElementById('deleteConfirmModal');
+  if (modal) modal.style.display = 'block';
+
+  clearInterval(deleteTimerInterval);
+  deleteTimerInterval = setInterval(() => {
+    deleteCountdownVal--;
+    if (timerDisplay) timerDisplay.textContent = `${deleteCountdownVal}s`;
+    
+    if (deleteCountdownVal <= 0) {
+      clearInterval(deleteTimerInterval);
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.style.opacity = '1';
+        confirmBtn.style.cursor = 'pointer';
+      }
+      if (timerDisplay) timerDisplay.textContent = 'Unlocked';
+    }
+  }, 1000);
 }
 
-function getLinearSvgIcon(trend, plunge, type) {
-  const trendDeg = parseFloat(trend) || 0;
-  const plungeVal = (plunge !== undefined && plunge !== '') ? plunge : '';
-  const strokeColor = getStructureColor(type || 'Lineation');
-
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-      <g transform="rotate(${trendDeg}, 20, 20)">
-        <line x1="20" y1="32" x2="20" y2="8" stroke="${strokeColor}" stroke-width="2.5" stroke-linecap="round" />
-        <path d="M 15 14 L 20 6 L 25 14" fill="none" stroke="${strokeColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="20" cy="20" r="2" fill="${strokeColor}" />
-      </g>
-      <text x="24" y="34" font-size="11" font-weight="bold" fill="${strokeColor}" font-family="monospace">${plungeVal}°</text>
-    </svg>
-  `;
-
-  return L.divIcon({
-    html: svg,
-    className: 'geo-svg-marker',
-    iconSize: [40, 40],
-    iconAnchor: [20, 20],
-    popupAnchor: [0, -10]
-  });
+function executeDeletion() {
+  const idsToDelete = new Set(recordsPendingDeletion.map(r => r.id));
+  records = records.filter(r => !idsToDelete.has(r.id));
+  persist();
+  abortDeletion();
+  render();
+  alert("Selected records permanently deleted.");
 }
 
-function getStructureColor(type) {
-  const structType = type || '';
-  if (structType.includes('Foliation') || structType.includes('S1') || structType.includes('S2')) return '#e67e22'; // Orange
-  if (structType.includes('Joint')) return '#27ae60'; // Green
-  if (structType.includes('Fault') || structType.includes('Shear')) return '#c0392b'; // Red
-  if (structType.includes('Bedding') || structType.includes('S0')) return '#2980b9'; // Blue
-  if (structType.includes('Lineation') || structType.includes('Fold')) return '#8e44ad'; // Purple
-  return '#2c3e50'; // Slate
+function abortDeletion() {
+  clearInterval(deleteTimerInterval);
+  const modal = document.getElementById('deleteConfirmModal');
+  if (modal) modal.style.display = 'none';
 }
 
 // ==========================================
-// 5. SPATIAL MAP & OVERLAY UTILITIES
+// 8. POPUP MAP & IN-MAP STATION EDITING
 // ==========================================
 function openSpatialMap() {
   const modal = document.getElementById('mapModal');
   if (modal) modal.style.display = 'block';
-
-  // Attach change listener to the vector toggle checkbox when map opens
-  const vectorToggleEl = getVectorToggleElement();
-  if (vectorToggleEl) {
-    vectorToggleEl.onchange = updateMapDisplay;
-  }
 
   setTimeout(() => {
     const validPoints = records.filter(r => r.lat && r.lon && !isNaN(parseFloat(r.lat)) && !isNaN(parseFloat(r.lon)));
@@ -301,55 +407,17 @@ function openSpatialMap() {
 
     if (!mapInstance) {
       mapInstance = L.map('map').setView([firstLat, firstLon], 13);
-
       osmTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '© OpenStreetMap contributors'
       }).addTo(mapInstance);
 
       mapDataGroup = L.layerGroup().addTo(mapInstance);
-
-      layerControl = L.control.layers(
-        { "OpenStreetMap (Standard)": osmTileLayer },
-        { "Survey Stations & Route": mapDataGroup },
-        { position: 'topright' }
-      ).addTo(mapInstance);
-
-      let liveMarker = null;
-      let accuracyCircle = null;
-
-      mapInstance.on('locationfound', function (e) {
-        const radius = e.accuracy / 2;
-        if (liveMarker) mapInstance.removeLayer(liveMarker);
-        if (accuracyCircle) mapInstance.removeLayer(accuracyCircle);
-
-        accuracyCircle = L.circle(e.latlng, {
-          radius: radius,
-          color: "#136AEC",
-          fillColor: "#136AEC",
-          fillOpacity: 0.15,
-          weight: 1
-        }).addTo(mapInstance);
-
-        liveMarker = L.circleMarker(e.latlng, {
-          radius: 7,
-          fillColor: "#2A93EE",
-          color: "#ffffff",
-          weight: 2,
-          opacity: 1,
-          fillOpacity: 1
-        }).addTo(mapInstance).bindPopup("<b>You are here</b>");
-      });
-
-      mapInstance.on('locationerror', function (e) {
-        console.warn("Live location unavailable: " + e.message);
-      });
-
+      gpsTrackPolyline = L.polyline([], { color: '#0984e3', weight: 4 }).addTo(mapInstance);
+      renderStoredGpsTrack();
     } else {
       mapInstance.invalidateSize();
     }
-
-    mapInstance.locate({ setView: false, enableHighAccuracy: true });
     updateMapDisplay();
   }, 100);
 }
@@ -361,304 +429,260 @@ function closeSpatialMap() {
 
 function updateMapDisplay() {
   if (!mapInstance || !mapDataGroup) return;
+  mapDataGroup.clearLayers();
 
-  const visibleMapRecords = records.filter(r =>
+  const validRecords = records.filter(r =>
     (r.projectId || 'PROJ-001') === activeProjectId &&
     r.showOnMap !== false &&
     r.lat && r.lon &&
     !isNaN(parseFloat(r.lat)) && !isNaN(parseFloat(r.lon))
   );
 
-  mapDataGroup.clearLayers();
-  if (visibleMapRecords.length === 0) return;
+  validRecords.forEach(r => {
+    const latlng = [parseFloat(r.lat), parseFloat(r.lon)];
+    const marker = L.circleMarker(latlng, {
+      radius: 7,
+      fillColor: '#e67e22',
+      color: '#ffffff',
+      weight: 2,
+      fillOpacity: 0.9
+    });
 
-  const vectorToggleEl = getVectorToggleElement();
-  const showVectors = vectorToggleEl ? vectorToggleEl.checked : true;
-  const routeCoordinates = [];
-
-  visibleMapRecords.forEach((r) => {
-    const lat = parseFloat(r.lat);
-    const lon = parseFloat(r.lon);
-    const latlng = [lat, lon];
-    routeCoordinates.push(latlng);
-
-    let marker;
-    if (showVectors) {
-      const checkLinear = isLinear(r.type);
-      if (checkLinear || (r.trend && r.plunge && !r.strike)) {
-        marker = L.marker(latlng, { icon: getLinearSvgIcon(r.trend || r.linTrend, r.plunge || r.linPlunge, r.type || r.linType) });
-      } else {
-        marker = L.marker(latlng, { icon: getPlanarSvgIcon(r.strike, r.dip, r.type || 'Bedding') });
-      }
-    } else {
-      marker = L.circleMarker(latlng, {
-        radius: 6,
-        fillColor: getStructureColor(r.type),
-        color: '#ffffff',
-        weight: 1.5,
-        opacity: 1,
-        fillOpacity: 0.9
-      });
-    }
-
+    // In-Map Station Popup with Edit Button
     const popupHtml = `
-      <div style="font-family: system-ui, sans-serif; font-size: 13px; line-height: 1.4; max-width: 240px;">
-        <div style="font-weight: bold; font-size: 14px; color: #2c3e50; border-bottom: 1px solid #dcdfe6; padding-bottom: 4px; margin-bottom: 6px;">
+      <div style="font-size:12px; font-family:sans-serif; min-width:180px;">
+        <div style="font-weight:bold; font-size:13px; color:#1f3a5f; border-bottom:1px solid #ddd; padding-bottom:3px; margin-bottom:4px;">
           📍 Station: ${escapeHTML(r.locNo || 'N/A')}
         </div>
-        <div><b>Attitude:</b> ${escapeHTML(r.formatted || r.type || 'N/A')}</div>
-        ${r.unit ? `<div><b>Formation/Unit:</b> ${escapeHTML(r.unit)}</div>` : ''}
-        ${r.lith ? `<div><b>Lithology:</b> ${escapeHTML(r.lith)}</div>` : ''}
-        ${r.sample ? `<div style="margin-top: 4px;"><b>Sample ID:</b> <span style="background: #e1f5fe; color: #0288d1; padding: 2px 6px; border-radius: 4px; font-weight: bold;">${escapeHTML(r.sample)}</span></div>` : ''}
-        ${r.remarks ? `<div style="margin-top: 6px; font-style: italic; background: #f8f9fa; padding: 6px; border-radius: 4px; border: 1px solid #e9ecef;">${escapeHTML(r.remarks)}</div>` : ''}
-        <div style="margin-top: 8px; font-size: 11px; color: #7f8c8d; border-top: 1px dashed #eee; padding-top: 4px;">
-          Lat: ${lat.toFixed(5)}, Lon: ${lon.toFixed(5)} ${r.alt ? '| Alt: ' + escapeHTML(r.alt) + 'm' : ''}
-        </div>
+        <div><b>Structure:</b> ${escapeHTML(r.formatted || 'N/A')}</div>
+        <div><b>Lithology:</b> ${escapeHTML(r.lith || '-')}</div>
+        <div><b>Formation:</b> ${escapeHTML(r.unit || '-')}</div>
+        ${r.remarks ? `<div style="font-style:italic; margin-top:4px; color:#555;">${escapeHTML(r.remarks)}</div>` : ''}
+        <button type="button" onclick="openStationEdit(${r.id})" class="btn-ok" style="width:100%; margin-top:8px; padding:4px 8px; font-size:11px;">
+          ✏️ Edit Station Data
+        </button>
       </div>
     `;
 
     marker.bindPopup(popupHtml);
     mapDataGroup.addLayer(marker);
   });
+}
 
-  if (routeCoordinates.length > 1) {
-    const routeLine = L.polyline(routeCoordinates, {
-      color: '#e74c3c',
-      weight: 2,
-      dashArray: '5, 7',
-      opacity: 0.65
-    });
-    mapDataGroup.addLayer(routeLine);
+// In-Map Station Edit Functionality
+function openStationEdit(id) {
+  const rec = records.find(r => r.id === id);
+  if (!rec) return;
+
+  document.getElementById('editRecordId').value = rec.id;
+  document.getElementById('editLocNo').value = rec.locNo || '';
+  document.getElementById('editLith').value = rec.lith || '';
+  document.getElementById('editUnit').value = rec.unit || '';
+  document.getElementById('editStrikeTrend').value = rec.strike || rec.trend || '';
+  document.getElementById('editDipPlunge').value = rec.dip || rec.plunge || '';
+  document.getElementById('editMinAlt').value = (rec.mineralization || '') + (rec.alteration ? `, ${rec.alteration}` : '');
+  document.getElementById('editRemarks').value = rec.remarks || '';
+
+  const editModal = document.getElementById('editModal');
+  if (editModal) editModal.style.display = 'block';
+}
+
+function closeEditModal() {
+  const editModal = document.getElementById('editModal');
+  if (editModal) editModal.style.display = 'none';
+}
+
+function saveStationEdit() {
+  const id = parseInt(document.getElementById('editRecordId').value, 10);
+  const rec = records.find(r => r.id === id);
+  if (!rec) return;
+
+  rec.locNo = document.getElementById('editLocNo').value;
+  rec.lith = document.getElementById('editLith').value;
+  rec.unit = document.getElementById('editUnit').value;
+  if (isLinear(rec.type)) {
+    rec.trend = document.getElementById('editStrikeTrend').value;
+    rec.plunge = document.getElementById('editDipPlunge').value;
+  } else {
+    rec.strike = document.getElementById('editStrikeTrend').value;
+    rec.dip = document.getElementById('editDipPlunge').value;
+  }
+  rec.remarks = document.getElementById('editRemarks').value;
+
+  persist();
+  closeEditModal();
+  render();
+  alert("Station data updated successfully!");
+}
+
+// ==========================================
+// 9. LIVE GPS TRACK RECORDER
+// ==========================================
+function toggleGpsTracking() {
+  const btn = document.getElementById('startTrackBtn');
+  if (!isTracking) {
+    if (!navigator.geolocation) {
+      alert("GPS not supported.");
+      return;
+    }
+    isTracking = true;
+    if (btn) {
+      btn.textContent = '⏸ Pause Track';
+      btn.className = 'btn-danger btn-small';
+    }
+
+    trackWatchId = navigator.geolocation.watchPosition(
+      pos => {
+        const point = [pos.coords.latitude, pos.coords.longitude];
+        gpsTrackPoints.push(point);
+        localStorage.setItem('gpsTraverseTrack', JSON.stringify(gpsTrackPoints));
+        renderStoredGpsTrack();
+      },
+      err => console.warn('Track Error: ' + err.message),
+      { enableHighAccuracy: true, maximumAge: 1000 }
+    );
+  } else {
+    isTracking = false;
+    if (btn) {
+      btn.textContent = '▶ Resume Track';
+      btn.className = 'btn-ok btn-small';
+    }
+    if (trackWatchId) navigator.geolocation.clearWatch(trackWatchId);
   }
 }
 
-function kmlToGeoJson(xmlDoc) {
-  const features = [];
-  const placemarks = xmlDoc.getElementsByTagName("Placemark");
-
-  for (let i = 0; i < placemarks.length; i++) {
-    const pm = placemarks[i];
-    const name = pm.getElementsByTagName("name")[0]?.textContent || `KML Feature ${i + 1}`;
-    const desc = pm.getElementsByTagName("description")[0]?.textContent || "";
-
-    const point = pm.getElementsByTagName("Point")[0];
-    if (point) {
-      const coords = point.getElementsByTagName("coordinates")[0]?.textContent.trim().split(',');
-      if (coords && coords.length >= 2) {
-        features.push({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: [parseFloat(coords[0]), parseFloat(coords[1])] },
-          properties: { name, desc }
-        });
-      }
-    }
-
-    const line = pm.getElementsByTagName("LineString")[0];
-    if (line) {
-      const coordsText = line.getElementsByTagName("coordinates")[0]?.textContent.trim();
-      if (coordsText) {
-        const lineCoords = coordsText.split(/\s+/).map(p => {
-          const parts = p.split(',');
-          return [parseFloat(parts[0]), parseFloat(parts[1])];
-        }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
-
-        if (lineCoords.length > 0) {
-          features.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: lineCoords },
-            properties: { name, desc }
-          });
-        }
-      }
-    }
-
-    const poly = pm.getElementsByTagName("Polygon")[0];
-    if (poly) {
-      const coordsText = poly.getElementsByTagName("coordinates")[0]?.textContent.trim();
-      if (coordsText) {
-        const ringCoords = coordsText.split(/\s+/).map(p => {
-          const parts = p.split(',');
-          return [parseFloat(parts[0]), parseFloat(parts[1])];
-        }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
-
-        if (ringCoords.length > 0) {
-          features.push({
-            type: "Feature",
-            geometry: { type: "Polygon", coordinates: [ringCoords] },
-            properties: { name, desc }
-          });
-        }
-      }
-    }
+function renderStoredGpsTrack() {
+  if (!gpsTrackPolyline) return;
+  gpsTrackPolyline.setLatLngs(gpsTrackPoints);
+  
+  // Calculate Traverse Distance
+  let totalMeters = 0;
+  for (let i = 1; i < gpsTrackPoints.length; i++) {
+    const from = L.latLng(gpsTrackPoints[i - 1]);
+    const to = L.latLng(gpsTrackPoints[i]);
+    totalMeters += from.distanceTo(to);
   }
-  return { type: "FeatureCollection", features };
+  const distEl = document.getElementById('trackDistance');
+  if (distEl) distEl.textContent = `Dist: ${(totalMeters / 1000).toFixed(2)} km`;
 }
 
-function applyKMLOverlay() {
-  const fileInput = document.getElementById('kmlOverlayFile');
-  const file = fileInput ? fileInput.files[0] : null;
-
-  if (!file) {
-    alert("Please select a .kml file first.");
-    return;
+function clearGpsTrack() {
+  if (confirm("Clear recorded GPS track points?")) {
+    gpsTrackPoints = [];
+    localStorage.removeItem('gpsTraverseTrack');
+    renderStoredGpsTrack();
   }
-  if (!mapInstance) {
-    alert("Please open the Field Map first.");
-    return;
-  }
+}
 
-  const reader = new FileReader();
-  reader.onload = function (e) {
-    try {
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(e.target.result, "text/xml");
-      const geojson = kmlToGeoJson(xmlDoc);
+// ==========================================
+// 10. EXPORTERS & EVENT LISTENERS
+// ==========================================
+function exportCSV() {
+  const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
+  if (projectRecords.length === 0) { alert('No data to export.'); return; }
+  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks'];
+  const csv = [cols.join(',')].concat(projectRecords.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','))).join('\n');
+  download(`structural_data_${activeProjectId}.csv`, csv, 'text/csv');
+}
 
-      if (geojson.features.length === 0) {
-        alert("No visible geometries found in KML.");
-        return;
-      }
-
-      removeKMLOverlay(false);
-
-      kmlMapOverlayLayer = L.geoJSON(geojson, {
-        style: { color: '#8e44ad', weight: 3, opacity: 0.85, fillOpacity: 0.25 },
-        pointToLayer: function (feature, latlng) {
-          return L.circleMarker(latlng, { radius: 6, fillColor: '#8e44ad', color: '#ffffff', weight: 2, opacity: 1, fillOpacity: 0.9 });
-        },
-        onEachFeature: function (feature, layer) {
-          if (feature.properties && feature.properties.name) {
-            layer.bindPopup(`<b>${feature.properties.name}</b><br>${feature.properties.desc || ''}`);
-          }
-        }
-      }).addTo(mapInstance);
-
-      if (layerControl) layerControl.addOverlay(kmlMapOverlayLayer, "🌍 KML Map Overlay");
-      if (kmlMapOverlayLayer.getBounds().isValid()) mapInstance.fitBounds(kmlMapOverlayLayer.getBounds());
-
-      alert("KML Map Layer overlaid successfully!");
-    } catch (err) {
-      alert("Error overlaying KML: " + err.message);
-    }
+function exportGeoJSON() {
+  const valid = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId && r.lat && r.lon);
+  const geojson = {
+    type: "FeatureCollection",
+    features: valid.map(r => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [parseFloat(r.lon), parseFloat(r.lat)] },
+      properties: { ...r }
+    }))
   };
-  reader.readAsText(file);
+  download(`traverse_${activeProjectId}.geojson`, JSON.stringify(geojson, null, 2), 'application/geo+json');
 }
 
-function removeKMLOverlay(showAlert = true) {
-  if (kmlMapOverlayLayer && mapInstance) {
-    if (layerControl) layerControl.removeLayer(kmlMapOverlayLayer);
-    mapInstance.removeLayer(kmlMapOverlayLayer);
-    kmlMapOverlayLayer = null;
-
-    const fileInput = document.getElementById('kmlOverlayFile');
-    if (fileInput) fileInput.value = '';
-
-    if (showAlert) alert("KML Map Overlay removed!");
-  } else if (showAlert) {
-    alert("No active KML overlay to remove.");
-  }
+function exportKML() {
+  const valid = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId && r.lat && r.lon);
+  let kml = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${activeProjectId}</name>`;
+  valid.forEach(r => {
+    kml += `<Placemark><name>${escapeHTML(r.locNo)}</name><description>${escapeHTML(r.formatted)}</description><Point><coordinates>${r.lon},${r.lat},${r.alt || 0}</coordinates></Point></Placemark>`;
+  });
+  kml += `</Document></kml>`;
+  download(`traverse_${activeProjectId}.kml`, kml, 'application/vnd.google-earth.kml+xml');
 }
 
-function applyCustomMapOverlay() {
-  const fileInput = document.getElementById('customMapFile');
-  const file = fileInput ? fileInput.files[0] : null;
-
-  if (!file) {
-    alert('Please select an image file (JPEG/PNG) of your map first.');
-    return;
-  }
-
-  let minLat = parseFloat(document.getElementById('ovMinLat')?.value);
-  let maxLat = parseFloat(document.getElementById('ovMaxLat')?.value);
-  let minLon = parseFloat(document.getElementById('ovMinLon')?.value);
-  let maxLon = parseFloat(document.getElementById('ovMaxLon')?.value);
-
-  if (isNaN(minLat) || isNaN(maxLat) || isNaN(minLon) || isNaN(maxLon)) {
-    alert('Please provide valid bounding coordinates (SW & NE corners) for the image overlay.');
-    return;
-  }
-
-  if (minLat > maxLat) [minLat, maxLat] = [maxLat, minLat];
-  if (minLon > maxLon) [minLon, maxLon] = [maxLon, minLon];
-
-  const bounds = [[minLat, minLon], [maxLat, maxLon]];
-  removeCustomMapOverlay();
-
-  currentOverlayUrl = URL.createObjectURL(file);
-  customOverlayLayer = L.imageOverlay(currentOverlayUrl, bounds, { opacity: 0.85, interactive: true }).addTo(mapInstance);
-
-  if (layerControl) layerControl.addOverlay(customOverlayLayer, "Custom Map Overlay");
-  mapInstance.fitBounds(bounds);
-  alert('Custom map overlay loaded successfully!');
-}
-
-function removeCustomMapOverlay() {
-  if (customOverlayLayer && mapInstance) {
-    if (layerControl) layerControl.removeLayer(customOverlayLayer);
-    mapInstance.removeLayer(customOverlayLayer);
-    customOverlayLayer = null;
-  }
-  if (currentOverlayUrl) {
-    URL.revokeObjectURL(currentOverlayUrl);
-    currentOverlayUrl = null;
-  }
-}
-
-function renderSpatialMapWithGeofence(e) {
-  if (e && e.preventDefault) e.preventDefault();
-
-  if (!mapInstance) {
-    alert("Map instance not found. Please open the spatial map modal first.");
-    return;
-  }
-
-  const minLat = parseFloat(document.getElementById('gfMinLat')?.value);
-  const maxLat = parseFloat(document.getElementById('gfMaxLat')?.value);
-  const minLon = parseFloat(document.getElementById('gfMinLon')?.value);
-  const maxLon = parseFloat(document.getElementById('gfMaxLon')?.value);
-
-  if (isNaN(minLat) || isNaN(maxLat) || isNaN(minLon) || isNaN(maxLon)) {
-    alert("Please enter valid numeric values for all 4 coordinates.");
-    return;
-  }
-
-  if (minLat >= maxLat || minLon >= maxLon) {
-    alert("Min Lat/Lon must be strictly smaller than Max Lat/Lon!");
-    return;
-  }
-
-  updateMapDisplay();
+function download(name, content, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type }));
+  a.download = name;
+  a.click();
 }
 
 function toggleMapRecord(id, isChecked) {
   const rec = records.find(r => r.id === id);
   if (rec) {
     rec.showOnMap = isChecked;
-    localStorage.setItem('structuralRecords', JSON.stringify(records));
+    persist();
     updateMapDisplay();
   }
 }
 
-function toggleAllMapRecords(isChecked) {
+function toggleSelectAllMap(isChecked) {
   records.forEach(r => {
     if ((r.projectId || 'PROJ-001') === activeProjectId) r.showOnMap = isChecked;
   });
-  localStorage.setItem('structuralRecords', JSON.stringify(records));
-  updateMapDisplay();
+  persist();
+  render();
 }
 
-function toggleSelectAllMap(isChecked) {
-  toggleAllMapRecords(isChecked);
+function handleLocModeChange() {
+  const mode = document.getElementById('locCountMode')?.value;
+  const locNo = document.getElementById('locNo');
+  if (mode === 'manual') {
+    if (locNo) locNo.readOnly = false;
+  } else {
+    if (locNo) locNo.readOnly = true;
+    updateLocationID();
+  }
 }
 
-// ==========================================
-// 6. DOM EVENT LISTENERS & SW REGISTRATION
-// ==========================================
+function updateLocationID() {
+  const prefix = document.getElementById('locPrefix')?.value || 'JU';
+  const num = parseInt(localStorage.getItem('locationCounter') || '1', 10);
+  const locNo = document.getElementById('locNo');
+  if (locNo) locNo.value = `${prefix}-${String(num).padStart(3, '0')}`;
+}
+
+function toggleSampleState() {
+  const isChecked = document.getElementById('takeSample')?.checked;
+  ['sampleType', 'samplePrefix', 'sampleCounterBtn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !isChecked;
+  });
+  const sample = document.getElementById('sample');
+  if (sample) sample.value = isChecked ? `DD-${String(localStorage.getItem('sampleCounter') || '1').padStart(3, '0')}` : 'No Sample Collected';
+}
+
+function setSampleCounter() {
+  const input = prompt("Set next sample sequence number:");
+  if (input !== null) {
+    localStorage.setItem('sampleCounter', parseInt(input, 10) || 1);
+    toggleSampleState();
+  }
+}
+
+function startVoiceNote() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert("Voice recognition not supported."); return; }
+  const rec = new SR();
+  rec.onresult = e => {
+    document.getElementById('remarks').value += ' ' + e.results[0][0].transcript;
+  };
+  rec.start();
+}
+
+// Initializer
 document.addEventListener('DOMContentLoaded', () => {
   const dateEl = document.getElementById('date');
   if (dateEl && !dateEl.value) dateEl.valueAsDate = new Date();
 
-  // Attach live preview updates across field inputs
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updatePreview);
@@ -667,18 +691,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const typeEl = document.getElementById('type');
   if (typeEl) {
     typeEl.addEventListener('change', function () {
-      const customDiv = document.getElementById('customStructureDiv');
-      if (customDiv) customDiv.classList.toggle('hidden', this.value !== 'Other');
-
-      const planar = document.getElementById('planarFields');
-      const linear = document.getElementById('linearFields');
-      if (isLinear(this.value)) {
-        if (planar) planar.classList.add('hidden');
-        if (linear) linear.classList.remove('hidden');
-      } else {
-        if (planar) planar.classList.remove('hidden');
-        if (linear) linear.classList.add('hidden');
-      }
+      const isLin = isLinear(this.value);
+      document.getElementById('planarFields')?.classList.toggle('hidden', isLin);
+      document.getElementById('linearFields')?.classList.toggle('hidden', !isLin);
+      document.getElementById('customStructureDiv')?.classList.toggle('hidden', this.value !== 'Other');
       updatePreview();
     });
   }
@@ -687,12 +703,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (strikeEl) {
     strikeEl.addEventListener('input', function () {
       const strike = parseInt(this.value, 10);
-      const dipdirEl = document.getElementById('dipdir');
-      if (!isNaN(strike)) {
-        const dipdir = (strike + 90) % 360;
-        if (dipdirEl) dipdirEl.value = dipdir.toString().padStart(3, '0') + '° (' + getQuadrant(dipdir) + ')';
-      } else {
-        if (dipdirEl) dipdirEl.value = '';
+      const ddEl = document.getElementById('dipdir');
+      if (!isNaN(strike) && ddEl) {
+        const dd = (strike + 90) % 360;
+        ddEl.value = `${pad3(dd)}° (${getQuadrant(dd)})`;
       }
       calculateLineationFromPitch();
     });
@@ -701,42 +715,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const dipEl = document.getElementById('dip');
   if (dipEl) dipEl.addEventListener('input', calculateLineationFromPitch);
 
-  const samplePrefixEl = document.getElementById('samplePrefix');
-  if (samplePrefixEl) {
-    samplePrefixEl.addEventListener('input', function () {
-      this.value = this.value.toUpperCase();
-      updateSampleID();
-    });
-  }
-
-  const locPrefixEl = document.getElementById('locPrefix');
-  if (locPrefixEl) {
-    locPrefixEl.addEventListener('input', function () {
-      this.value = this.value.toUpperCase();
-      updateLocationID();
-    });
-  }
-
-  toggleSampleState();
+  renderProjectDropdown();
   updateLocationID();
+  toggleSampleState();
+  render();
   updatePreview();
 });
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js')
-      .then(reg => {
-        reg.onupdatefound = () => {
-          const installingWorker = reg.installing;
-          installingWorker.onstatechange = () => {
-            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              if (confirm('New structural updates available! Reload app to apply?')) {
-                window.location.reload();
-              }
-            }
-          };
-        };
-      })
-      .catch(err => console.error('Service Worker registration failed:', err));
+    navigator.serviceWorker.register('./sw.js').catch(err => console.error(err));
   });
 }
