@@ -12,11 +12,16 @@ if (!projects.includes(activeProjectId)) {
 
 let mapInstance = null;
 let mapDataGroup = null;
+let liveGpsLayerGroup = null;
 let osmTileLayer = null;
 let layerControl = null;
 let kmlMapOverlayLayer = null;
 let customOverlayLayer = null;
 let currentOverlayUrl = null;
+
+// Live GPS Blue Dot Handles
+let liveLocationMarker = null;
+let liveAccuracyCircle = null;
 
 // GPS Track Recording State
 let isTracking = false;
@@ -113,6 +118,86 @@ function createNewProject() {
 // ==========================================
 // 4. CALCULATION & LIVE PREVIEW UTILITIES
 // ==========================================
+function toggleLineationSection() {
+  const panel = document.getElementById('associatedLineationDiv');
+  const btn = document.getElementById('toggleLineationBtn');
+  if (!panel || !btn) return;
+  const isHidden = panel.classList.contains('hidden');
+  if (isHidden) {
+    panel.classList.remove('hidden');
+    btn.innerHTML = '➖ Remove Lineation (Pitch)';
+    updatePitchFromOptions();
+    calculateLineationFromPitch();
+  } else {
+    panel.classList.add('hidden');
+    btn.innerHTML = '➕ Associated Lineation (Pitch / Rake)';
+    ['linType', 'linRake', 'linTrend', 'linPlunge'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    updatePreview();
+  }
+}
+
+function updatePitchFromOptions() {
+  const strikeVal = parseFloat(val('strike'));
+  const pitchSelect = document.getElementById('pitchFrom');
+  if (!pitchSelect) return;
+
+  if (!isNaN(strikeVal)) {
+    const strikeDeg = pad3(strikeVal);
+    const oppDeg = pad3((strikeVal + 180) % 360);
+    const currentVal = pitchSelect.value;
+
+    pitchSelect.innerHTML = `
+      <option value="strike">${strikeDeg}° (Strike End)</option>
+      <option value="opposite">${oppDeg}° (Opposite End)</option>
+    `;
+    pitchSelect.value = currentVal || 'strike';
+  } else {
+    pitchSelect.innerHTML = `
+      <option value="strike">000° (Strike End)</option>
+      <option value="opposite">180° (Opposite End)</option>
+    `;
+  }
+}
+
+function calculateLineationFromPitch() {
+  const strike = parseFloat(val('strike'));
+  const dip = parseFloat(val('dip'));
+  const rake = parseFloat(val('linRake'));
+  const pitchFrom = val('pitchFrom') || 'strike';
+
+  const trendInput = document.getElementById('linTrend');
+  const plungeInput = document.getElementById('linPlunge');
+  if (!trendInput || !plungeInput) return;
+
+  if (isNaN(strike) || isNaN(dip) || isNaN(rake) || rake < 0 || rake > 90) {
+    trendInput.value = '';
+    plungeInput.value = '';
+    updatePreview();
+    return;
+  }
+
+  const radDip = (dip * Math.PI) / 180;
+  const radRake = (rake * Math.PI) / 180;
+
+  const sinPlunge = Math.sin(radDip) * Math.sin(radRake);
+  const plungeDeg = Math.round((Math.asin(Math.min(1, Math.max(-1, sinPlunge))) * 180) / Math.PI);
+
+  const betaRad = Math.atan2(Math.tan(radRake) * Math.cos(radDip), 1);
+  const betaDeg = (betaRad * 180) / Math.PI;
+
+  let trendDeg = (pitchFrom === 'opposite')
+    ? (strike + 180 - betaDeg + 360) % 360
+    : (strike + betaDeg + 360) % 360;
+
+  trendDeg = Math.round(trendDeg);
+  trendInput.value = pad3(trendDeg) + '°';
+  plungeInput.value = String(plungeDeg).padStart(2, '0') + '°';
+  updatePreview();
+}
+
 function fmt() {
   let t = val('type');
   if (t === 'Other' && val('customStructure')) t = val('customStructure');
@@ -145,62 +230,6 @@ function updatePreview() {
   if (previewEl) previewEl.innerHTML = `<span class="fmt-preview">${fmt()}</span>`;
 }
 
-function toggleLineationSection() {
-  const panel = document.getElementById('associatedLineationDiv');
-  const btn = document.getElementById('toggleLineationBtn');
-  if (!panel || !btn) return;
-  const isHidden = panel.classList.contains('hidden');
-  if (isHidden) {
-    panel.classList.remove('hidden');
-    btn.innerHTML = '➖ Remove Lineation (Pitch)';
-    calculateLineationFromPitch();
-  } else {
-    panel.classList.add('hidden');
-    btn.innerHTML = '➕ Associated Lineation (Pitch / Rake)';
-    ['linType', 'linRake', 'linTrend', 'linPlunge'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.value = '';
-    });
-    updatePreview();
-  }
-}
-
-function calculateLineationFromPitch() {
-  const strike = parseFloat(val('strike'));
-  const dip = parseFloat(val('dip'));
-  const rake = parseFloat(val('linRake'));
-  const pitchFrom = val('pitchFrom');
-
-  const trendInput = document.getElementById('linTrend');
-  const plungeInput = document.getElementById('linPlunge');
-  if (!trendInput || !plungeInput) return;
-
-  if (isNaN(strike) || isNaN(dip) || isNaN(rake) || rake < 0 || rake > 90) {
-    trendInput.value = '';
-    plungeInput.value = '';
-    updatePreview();
-    return;
-  }
-
-  const radDip = (dip * Math.PI) / 180;
-  const radRake = (rake * Math.PI) / 180;
-
-  const sinPlunge = Math.sin(radDip) * Math.sin(radRake);
-  const plungeDeg = Math.round((Math.asin(sinPlunge) * 180) / Math.PI);
-
-  const cosPlunge = Math.cos((plungeDeg * Math.PI) / 180);
-  const betaDeg = cosPlunge !== 0 ? (Math.acos(Math.cos(radRake) / cosPlunge) * 180) / Math.PI : 0;
-
-  let trendDeg = (pitchFrom === 'opposite')
-    ? (strike + 180 - betaDeg + 360) % 360
-    : (strike + betaDeg + 360) % 360;
-
-  trendDeg = Math.round(trendDeg);
-  trendInput.value = pad3(trendDeg) + '°';
-  plungeInput.value = String(plungeDeg).padStart(2, '0') + '°';
-  updatePreview();
-}
-
 // ==========================================
 // 5. GPS POSITIONING ENGINE (STRICT SATELLITE FIX)
 // ==========================================
@@ -212,49 +241,64 @@ function getGPS() {
 
   if (!navigator.geolocation) {
     alert('GPS Engine Error: Geolocation APIs are disabled or unsupported.');
+    if (latField) latField.value = 'Unsupported';
     return;
   }
 
-  if (latField) latField.value = 'Locating...';
-  if (lonField) lonField.value = 'Locating...';
-  if (accField) accField.value = 'Connecting...';
+  if (latField && !latField.value) latField.value = 'Locating...';
+  if (lonField && !lonField.value) lonField.value = 'Locating...';
+  if (accField) accField.value = '...';
 
-  // Explicit high-accuracy call with zero cache age to force satellite chip
   navigator.geolocation.getCurrentPosition(
     function (p) {
       if (latField) latField.value = p.coords.latitude.toFixed(6);
       if (lonField) lonField.value = p.coords.longitude.toFixed(6);
       if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
       if (altField) altField.value = (p.coords.altitude !== null && !isNaN(p.coords.altitude)) ? p.coords.altitude.toFixed(1) : 'N/A';
-      if (typeof updatePreview === 'function') updatePreview();
-
-      // Audio/haptic feedback on success
-      if (navigator.vibrate) navigator.vibrate(80);
+      updatePreview();
+      if (navigator.vibrate) navigator.vibrate(60);
     },
     function (err) {
-      if (latField) latField.value = '';
-      if (lonField) lonField.value = '';
-      if (accField) accField.value = 'Error';
-
-      let msg = '';
-      if (err.code === 1) {
-        msg = "Permission Denied: Please tap the lock icon in the address bar and enable 'Precise Location'.";
-      } else if (err.code === 2) {
-        msg = "Position Unavailable: GPS satellites not locked. Step out under open sky.";
-      } else if (err.code === 3) {
-        msg = "GPS Timeout: Satellites took too long to lock. Tap 'Sync GPS Fix' again.";
+      if (err.code === 3) {
+        navigator.geolocation.getCurrentPosition(
+          function (p2) {
+            if (latField) latField.value = p2.coords.latitude.toFixed(6);
+            if (lonField) lonField.value = p2.coords.longitude.toFixed(6);
+            if (accField) accField.value = Math.round(p2.coords.accuracy) + 'm';
+            if (altField) altField.value = (p2.coords.altitude !== null && !isNaN(p2.coords.altitude)) ? p2.coords.altitude.toFixed(1) : 'N/A';
+            updatePreview();
+          },
+          function (err2) {
+            handleGpsFailure(err2);
+          },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
       } else {
-        msg = err.message;
+        handleGpsFailure(err);
       }
-      alert(msg);
     },
     {
       enableHighAccuracy: true,
-      timeout: 15000,
+      timeout: 8000,
       maximumAge: 0
     }
   );
+
+  function handleGpsFailure(err) {
+    if (latField && (latField.value === 'Locating...' || latField.value === 'Fetching...')) latField.value = '';
+    if (lonField && (lonField.value === 'Locating...' || lonField.value === 'Fetching...')) lonField.value = '';
+    if (accField) accField.value = 'Error';
+
+    let msg = '';
+    if (err.code === 1) msg = "Permission Denied: Tap the padlock/tune icon near URL and enable 'Precise Location'.";
+    else if (err.code === 2) msg = "Position Unavailable: GPS satellites not locked. Step out under open sky.";
+    else if (err.code === 3) msg = "GPS Timeout: Tap 'Sync GPS' again.";
+    else msg = err.message || "Unknown GPS error.";
+
+    console.warn("GPS Status: " + msg);
+  }
 }
+
 // ==========================================
 // 6. RECORD LOGGING & MANAGEMENT
 // ==========================================
@@ -297,7 +341,7 @@ function saveEntry() {
 }
 
 // ==========================================
-// PHOTO ATTACHMENT & SEQUENTIAL NAMING ENGINE 
+// 7. PHOTO ATTACHMENT & SEQUENTIAL NAMING
 // ==========================================
 let currentStationPhotos = [];
 
@@ -311,10 +355,7 @@ function handlePhotoCapture(event) {
   Array.from(files).forEach((file) => {
     const photoIndex = currentStationPhotos.length + 1;
     const formattedPhotoName = `${locNo} (${photoIndex})`;
-
     currentStationPhotos.push(formattedPhotoName);
-
-    // Downloads the photo directly to phone with the sequential station name
     savePhotoToDevice(file, `${formattedPhotoName}.jpg`);
   });
 
@@ -323,8 +364,6 @@ function handlePhotoCapture(event) {
   }
 
   updatePreview();
-
-  // Reset the input value so user can snap additional photos at the same station
   event.target.value = '';
 }
 
@@ -336,12 +375,10 @@ function savePhotoToDevice(file, filename) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function clearForm(resetDate = true) {
-  // Step 2: Reset the active photo tracker array for the next station
   currentStationPhotos = [];
   const photoEl = document.getElementById('photo');
   if (photoEl && resetDate) photoEl.value = '';
@@ -404,7 +441,7 @@ function toggleRecordSelection(id, isSelected) {
 }
 
 // ==========================================
-// 7. 50-SECOND TIMER SAFE DELETION
+// 8. 50-SECOND TIMER SAFE DELETION
 // ==========================================
 function initiateDeleteSelected() {
   recordsPendingDeletion = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId && r.selectedForDelete);
@@ -464,7 +501,7 @@ function abortDeletion() {
 }
 
 // ==========================================
-// 8. DYNAMIC SVG SYMBOLS FOR LEAFLET
+// 9. DYNAMIC SVG SYMBOLS FOR LEAFLET
 // ==========================================
 function getPlanarSvgIcon(strike, dip, type) {
   const strikeDeg = parseFloat(strike) || 0;
@@ -527,19 +564,13 @@ function getStructureColor(type) {
 }
 
 // ==========================================
-// 9. POPUP MAP & IN-MAP STATION EDITING
+// 10. POPUP MAP & IN-MAP STATION EDITING
 // ==========================================
-// Handles for live GPS blue dot marker, accuracy circle & dedicated overlay group
-let liveLocationMarker = null;
-let liveAccuracyCircle = null;
-let liveGpsLayerGroup = null;
-
 function openSpatialMap() {
   const modal = document.getElementById('mapModal');
   if (modal) modal.style.display = 'block';
 
   setTimeout(() => {
-    // 1. Check if we already have coordinates synced in the Section 1 form inputs
     const formLat = parseFloat(val('lat'));
     const formLon = parseFloat(val('lon'));
     const hasFormCoords = !isNaN(formLat) && !isNaN(formLon);
@@ -549,9 +580,7 @@ function openSpatialMap() {
     const defaultLon = hasFormCoords ? formLon : (validPoints.length > 0 ? parseFloat(validPoints[0].lon) : 78.0);
 
     if (!mapInstance) {
-      mapInstance = L.map('map', {
-        zoomControl: true
-      }).setView([defaultLat, defaultLon], 16);
+      mapInstance = L.map('map', { zoomControl: true }).setView([defaultLat, defaultLon], 16);
 
       osmTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
@@ -563,9 +592,6 @@ function openSpatialMap() {
       gpsTrackPolyline = L.polyline([], { color: '#0984e3', weight: 4 }).addTo(mapInstance);
       renderStoredGpsTrack();
 
-      // ==========================================
-      // LIVE GPS LOCATION FOUND EVENT (BLUE DOT)
-      // ==========================================
       mapInstance.on('locationfound', function (e) {
         renderBlueDotAt(e.latlng.lat, e.latlng.lng, e.accuracy);
         mapInstance.setView(e.latlng, Math.max(mapInstance.getZoom(), 16));
@@ -573,29 +599,24 @@ function openSpatialMap() {
 
       mapInstance.on('locationerror', function (e) {
         console.warn('Map live location error: ' + e.message);
-        // Fallback: If Leaflet locate times out but we have synced form coordinates, pin there
         if (hasFormCoords) {
           renderBlueDotAt(formLat, formLon, parseFloat(val('accuracy')) || 10);
         }
       });
-
     } else {
       mapInstance.invalidateSize();
     }
 
-    // 2. Refresh plotted survey stations
     updateMapDisplay();
 
-    // 3. If fresh coordinates exist in the form, paint the blue dot immediately!
     if (hasFormCoords) {
       const formAcc = parseFloat(val('accuracy')) || 10;
       renderBlueDotAt(formLat, formLon, formAcc);
       mapInstance.setView([formLat, formLon], Math.max(mapInstance.getZoom(), 16));
     }
 
-    // 4. Request hardware GPS update through Leaflet
     mapInstance.locate({
-      setView: !hasFormCoords, // Only auto-pan if form coordinates didn't already position it
+      setView: !hasFormCoords,
       maxZoom: 17,
       enableHighAccuracy: true,
       watch: false
@@ -611,13 +632,11 @@ function renderBlueDotAt(lat, lon, accuracy) {
     liveGpsLayerGroup = L.layerGroup().addTo(mapInstance);
   }
 
-  // Clear previous live dot layers safely without touching stations or custom overlays
   liveGpsLayerGroup.clearLayers();
 
   const latlng = [lat, lon];
   const radius = accuracy || 10;
 
-  // 1. Shaded accuracy halo
   liveAccuracyCircle = L.circle(latlng, {
     radius: radius,
     color: '#007aff',
@@ -627,13 +646,12 @@ function renderBlueDotAt(lat, lon, accuracy) {
   });
   liveGpsLayerGroup.addLayer(liveAccuracyCircle);
 
-  // 2. Pulsing Blue Dot HTML (utilizes .live-gps-dot and .live-gps-dot-inner)
   const blueDotHtml = `<div class="live-gps-dot-inner"></div>`;
   const blueDotIcon = L.divIcon({
     className: 'live-gps-dot',
     html: blueDotHtml,
-    iconSize: [20, 20],
-    iconAnchor: [10, 10]
+    iconSize: [24, 24],
+    iconAnchor: [12, 12]
   });
 
   liveLocationMarker = L.marker(latlng, {
@@ -746,7 +764,7 @@ function saveStationEdit() {
 }
 
 // ==========================================
-// 10. GPS TRAVERSE RECORDER
+// 11. GPS TRAVERSE RECORDER
 // ==========================================
 function toggleGpsTracking() {
   const btn = document.getElementById('startTrackBtn');
@@ -802,7 +820,7 @@ function clearGpsTrack() {
 }
 
 // ==========================================
-// 11. OVERLAYS (KML & SCANNED MAPS)
+// 12. OVERLAYS (KML & SCANNED MAPS)
 // ==========================================
 function kmlToGeoJson(xmlDoc) {
   const features = [];
@@ -896,7 +914,7 @@ function removeCustomMapOverlay() {
 }
 
 // ==========================================
-// 12. DATA EXPORTS & BACKUPS (WhatsApp / DB)
+// 13. DATA EXPORTS & BACKUPS (WhatsApp / DB)
 // ==========================================
 function exportCSV() {
   const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
@@ -1067,57 +1085,7 @@ function startVoiceNote() {
 }
 
 // ==========================================
-// 12.1 PHOTO ATTACHMENT & SEQUENTIAL NAMING ENGINE
-// ==========================================
-// Array to keep track of photo tags taken for the current station
-let currentStationPhotos = [];
-
-function handlePhotoCapture(event) {
-  const files = event.target.files;
-  if (!files || files.length === 0) return;
-
-  const locNo = val('locNo') || 'STATION';
-  const photoInputDisplay = document.getElementById('photo');
-
-  // Process each captured image
-  Array.from(files).forEach((file) => {
-    // Increment the sequence count for this station
-    const photoIndex = currentStationPhotos.length + 1;
-    const formattedPhotoName = `${locNo} (${photoIndex})`;
-
-    // Track tag in local array
-    currentStationPhotos.push(formattedPhotoName);
-
-    // Save/Download directly to phone with the station name: e.g., "JU-002 (1).jpg"
-    savePhotoToDevice(file, `${formattedPhotoName}.jpg`);
-  });
-
-  // Display comma-separated list of tags in the input box
-  if (photoInputDisplay) {
-    photoInputDisplay.value = currentStationPhotos.join(', ');
-  }
-
-  updatePreview();
-
-  // Reset the input so taking another photo triggers 'change' event cleanly
-  event.target.value = '';
-}
-
-function savePhotoToDevice(file, filename) {
-  const url = URL.createObjectURL(file);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename; // Sets custom filename: e.g., JU-002 (1).jpg
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-
-  // Clean up object URL after a short delay
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-// ==========================================
-// 13. DOM BINDINGS & SW INIT
+// 14. DOM BINDINGS & SW INIT
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
   const dateEl = document.getElementById('date');
@@ -1148,6 +1116,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const dd = (strike + 90) % 360;
         ddEl.value = `${pad3(dd)}° (${getQuadrant(dd)})`;
       }
+      updatePitchFromOptions();
       calculateLineationFromPitch();
     });
   }
@@ -1161,8 +1130,16 @@ document.addEventListener('DOMContentLoaded', () => {
   render();
   updatePreview();
 
-  // Pre-warm the phone's GNSS satellite antenna upon opening the app
+  // AUTOMATIC GPS PRE-WARMING ON LOAD / REFRESH
   if (typeof getGPS === 'function') {
+    setTimeout(getGPS, 600);
+  }
+});
+
+// Window resize handler for Leaflet tiles
+window.addEventListener('resize', () => {
+  if (mapInstance) {
+    mapInstance.invalidateSize();
   }
 });
 
