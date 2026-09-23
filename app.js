@@ -480,17 +480,27 @@ function getStructureColor(type) {
 // ==========================================
 // 9. POPUP MAP & IN-MAP STATION EDITING
 // ==========================================
+// Handles for live GPS blue dot marker & accuracy circle
+let liveLocationMarker = null;
+let liveAccuracyCircle = null;
+
 function openSpatialMap() {
   const modal = document.getElementById('mapModal');
   if (modal) modal.style.display = 'block';
 
   setTimeout(() => {
+    // If we have form coordinates already synced, default there, otherwise fallback to standard center
+    const formLat = parseFloat(val('lat'));
+    const formLon = parseFloat(val('lon'));
+    const validFormCoords = !isNaN(formLat) && !isNaN(formLon);
+
     const validPoints = records.filter(r => r.lat && r.lon && !isNaN(parseFloat(r.lat)) && !isNaN(parseFloat(r.lon)));
-    const firstLat = validPoints.length > 0 ? parseFloat(validPoints[0].lat) : 30.0;
-    const firstLon = validPoints.length > 0 ? parseFloat(validPoints[0].lon) : 78.0;
+    const defaultLat = validFormCoords ? formLat : (validPoints.length > 0 ? parseFloat(validPoints[0].lat) : 30.0);
+    const defaultLon = validFormCoords ? formLon : (validPoints.length > 0 ? parseFloat(validPoints[0].lon) : 78.0);
 
     if (!mapInstance) {
-      mapInstance = L.map('map').setView([firstLat, firstLon], 13);
+      mapInstance = L.map('map').setView([defaultLat, defaultLon], 15);
+      
       osmTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '© OpenStreetMap contributors'
@@ -499,11 +509,59 @@ function openSpatialMap() {
       mapDataGroup = L.layerGroup().addTo(mapInstance);
       gpsTrackPolyline = L.polyline([], { color: '#0984e3', weight: 4 }).addTo(mapInstance);
       renderStoredGpsTrack();
+
+      // ==========================================
+      // LIVE GPS LOCATION FOUND EVENT (BLUE DOT)
+      // ==========================================
+      mapInstance.on('locationfound', function (e) {
+        const radius = e.accuracy;
+
+        // Clean up previous live indicators
+        if (liveLocationMarker) mapInstance.removeLayer(liveLocationMarker);
+        if (liveAccuracyCircle) mapInstance.removeLayer(liveAccuracyCircle);
+
+        // 1. Shaded accuracy halo
+        liveAccuracyCircle = L.circle(e.latlng, {
+          radius: radius,
+          color: '#136AEC',
+          fillColor: '#136AEC',
+          fillOpacity: 0.15,
+          weight: 1.5
+        }).addTo(mapInstance);
+
+        // 2. Pulsing Blue Dot Marker
+        const blueDotIcon = L.divIcon({
+          className: 'live-gps-dot',
+          iconSize: [14, 14],
+          iconAnchor: [7, 7]
+        });
+
+        liveLocationMarker = L.marker(e.latlng, { icon: blueDotIcon, zIndexOffset: 1000 })
+          .addTo(mapInstance)
+          .bindPopup(`<b>📍 You are here</b><br>Accuracy: ±${Math.round(radius)}m`);
+
+        // Center the view directly onto the blue dot
+        mapInstance.setView(e.latlng, Math.max(mapInstance.getZoom(), 16));
+      });
+
+      mapInstance.on('locationerror', function (e) {
+        console.warn('Map live location error:', e.message);
+      });
+
     } else {
       mapInstance.invalidateSize();
     }
+
+    // Request fresh location and auto-center map with high accuracy
+    mapInstance.locate({
+      setView: true,
+      maxZoom: 17,
+      enableHighAccuracy: true,
+      watch: false
+    });
+
     updateMapDisplay();
-  }, 100);
+  }, 150);
 }
 
 function closeSpatialMap() {
