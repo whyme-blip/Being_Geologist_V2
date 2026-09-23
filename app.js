@@ -202,7 +202,7 @@ function calculateLineationFromPitch() {
 }
 
 // ==========================================
-// 5. GPS POSITIONING ENGINE (ORIGINAL PROVEN SATELLITE ENGINE)
+// 5. GPS POSITIONING ENGINE (STRICT SATELLITE FIX)
 // ==========================================
 function getGPS() {
   const latField = document.getElementById('lat');
@@ -212,60 +212,49 @@ function getGPS() {
 
   if (!navigator.geolocation) {
     alert('GPS Engine Error: Geolocation APIs are disabled or unsupported.');
-    if (latField) latField.value = 'Unsupported';
     return;
   }
 
-  if (latField && !latField.value) latField.value = 'Fetching...';
-  if (lonField && !lonField.value) lonField.value = 'Fetching...';
-  if (accField) accField.value = '...';
+  if (latField) latField.value = 'Locating...';
+  if (lonField) lonField.value = 'Locating...';
+  if (accField) accField.value = 'Connecting...';
 
+  // Explicit high-accuracy call with zero cache age to force satellite chip
   navigator.geolocation.getCurrentPosition(
     function (p) {
       if (latField) latField.value = p.coords.latitude.toFixed(6);
       if (lonField) lonField.value = p.coords.longitude.toFixed(6);
       if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
-      if (altField) altField.value = p.coords.altitude ? p.coords.altitude.toFixed(1) : 'N/A';
+      if (altField) altField.value = (p.coords.altitude !== null && !isNaN(p.coords.altitude)) ? p.coords.altitude.toFixed(1) : 'N/A';
       if (typeof updatePreview === 'function') updatePreview();
+
+      // Audio/haptic feedback on success
+      if (navigator.vibrate) navigator.vibrate(80);
     },
-    function (e) {
-      if (e.code === 3) {
-        // Fallback retry with longer timeout if initial satellite handshake needs more time
-        navigator.geolocation.getCurrentPosition(
-          function (p2) {
-            if (latField) latField.value = p2.coords.latitude.toFixed(6);
-            if (lonField) lonField.value = p2.coords.longitude.toFixed(6);
-            if (accField) accField.value = Math.round(p2.coords.accuracy) + 'm';
-            if (altField) altField.value = p2.coords.altitude ? p2.coords.altitude.toFixed(1) : 'N/A';
-            if (typeof updatePreview === 'function') updatePreview();
-          },
-          function (e2) {
-            handleGeoError(e2);
-          },
-          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-        );
+    function (err) {
+      if (latField) latField.value = '';
+      if (lonField) lonField.value = '';
+      if (accField) accField.value = 'Error';
+
+      let msg = '';
+      if (err.code === 1) {
+        msg = "Permission Denied: Please tap the lock icon in the address bar and enable 'Precise Location'.";
+      } else if (err.code === 2) {
+        msg = "Position Unavailable: GPS satellites not locked. Step out under open sky.";
+      } else if (err.code === 3) {
+        msg = "GPS Timeout: Satellites took too long to lock. Tap 'Sync GPS Fix' again.";
       } else {
-        handleGeoError(e);
+        msg = err.message;
       }
+      alert(msg);
     },
-    { enableHighAccuracy: true, timeout: 7000, maximumAge: 0 }
+    {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    }
   );
-
-  function handleGeoError(err) {
-    if (latField && latField.value === 'Fetching...') latField.value = '';
-    if (lonField && lonField.value === 'Fetching...') lonField.value = '';
-    if (accField) accField.value = 'Error';
-
-    let descriptiveMsg = '';
-    if (err.code === 1) descriptiveMsg = "Permission Denied. Please enable location clearances.";
-    else if (err.code === 2) descriptiveMsg = "Position Unavailable (Weak Satellite Sync).";
-    else if (err.code === 3) descriptiveMsg = "GPS Timeout.";
-    else descriptiveMsg = err.message;
-
-    console.warn("GPS Status: " + descriptiveMsg);
-  }
 }
-
 // ==========================================
 // 6. RECORD LOGGING & MANAGEMENT
 // ==========================================
