@@ -1,12 +1,16 @@
-const CACHE_NAME = 'geologger-app-v1.0.5'; // 1. Bumped version to force cache purge
-const TILE_CACHE_NAME = 'geologger-osm-tiles-v1';
+// =========================================================
+// VERSION DEFINITION (Bump this to 'v2.1', 'v2.2', etc.)
+// =========================================================
+const APP_VERSION = 'v2.0';
+const CACHE_NAME = `geologger-app-${APP_VERSION}`;
+const TILE_CACHE_NAME = 'geologger-osm-tiles-v1'; // Map tiles preserved across app updates
 
-// Static assets required for the app shell to function offline
+// App shell and core static libraries required offline
 const STATIC_ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './app.js?v=1.0.5',
+  `./app.js?v=${APP_VERSION}`,
   './icon-192.png',
   './icon-512.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
@@ -15,46 +19,45 @@ const STATIC_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
 ];
 
-// Install Event: Pre-cache static assets
+// 1. INSTALL: Pre-cache static shell & force skipWaiting
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Pre-caching static app shell & Leaflet resources');
+      console.log(`[SW] Pre-caching static app shell for version ${APP_VERSION}`);
       return cache.addAll(STATIC_ASSETS);
     })
   );
-  self.skipWaiting(); // Force activation immediately
+  self.skipWaiting();
 });
 
-// Activate Event: Clean up legacy caches
+// 2. ACTIVATE: Automatically purge all legacy app caches while preserving cached map tiles
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
+          // Delete old app versions, but keep the OSM map tiles intact
           if (key !== CACHE_NAME && key !== TILE_CACHE_NAME) {
-            console.log('[SW] Deleting old cache:', key);
+            console.log(`[SW] Purging old cache: ${key}`);
             return caches.delete(key);
           }
         })
       );
     })
   );
-  self.clients.claim(); // Immediately control all open client windows
+  self.clients.claim();
 });
 
-// Fetch Event: Cache management for App Shell & Map Tiles
+// 3. FETCH: Strategy Routing
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // 1. STRATEGY FOR MAP TILES (Cache-First -> Network Fallback)
+  // A. OSM Tiles: Cache-First, network fallback, cache on fetch
   if (url.hostname.includes('tile.openstreetmap.org')) {
     event.respondWith(
       caches.open(TILE_CACHE_NAME).then(async (cache) => {
         const cachedTile = await cache.match(event.request);
-        if (cachedTile) {
-          return cachedTile;
-        }
+        if (cachedTile) return cachedTile;
 
         try {
           const networkResponse = await fetch(event.request);
@@ -70,17 +73,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. STRATEGY FOR HTML & PAGE NAVIGATION (Network-First -> Cache Fallback)
-  // Ensures updates to HTML/JS reflect immediately online while working offline.
+  // B. Navigation / HTML: Network-First, Cache fallback (Ensures latest UI online, keeps working offline)
   if (event.request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname === '/') {
     event.respondWith(
       fetch(event.request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
           }
           return networkResponse;
         })
@@ -89,19 +89,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. STRATEGY FOR STATIC ASSETS (Cache-First -> Network Fallback)
+  // C. Static Assets & App JS: Cache-First, Network Fallback
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+    caches.match(event.request, { ignoreSearch: false }).then((cachedResponse) => {
+      if (cachedResponse) return cachedResponse;
 
       return fetch(event.request).then((networkResponse) => {
         if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
-          const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
         }
         return networkResponse;
       });
