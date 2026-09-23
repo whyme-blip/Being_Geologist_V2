@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Offline Structural Data Logger</title>
+  <title>Offline Structural Data Logger v2</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#1f3a5f">
 
-  <!-- Apple iOS PWA Enhancements -->
+  <!-- Apple iOS PWA Compatibility -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="GeoLogger">
+  <meta name="apple-mobile-web-app-title" content="GeoLogger v2">
   <link rel="apple-touch-icon" href="icon-192.png">
 
   <!-- Leaflet CSS & JS -->
@@ -108,12 +108,6 @@
       gap: 8px;
     }
 
-    .triple-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 6px;
-    }
-
     label {
       font-size: 11px;
       font-weight: 700;
@@ -170,17 +164,16 @@
     .btn-map { background: #27ae60; color: #fff; }
 
     .btn-small {
-      padding: 5px 10px;
+      padding: 6px 12px;
       font-size: 12px;
       font-weight: 600;
       border-radius: 5px;
     }
 
-    /* GPS Sync Inline Module */
     .gps-sync-btn {
       background: #0984e3;
       color: white;
-      padding: 7px 10px;
+      padding: 8px 12px;
       font-size: 12px;
       height: 35px;
       border-radius: var(--radius);
@@ -220,7 +213,6 @@
       font-weight: 700;
     }
 
-    /* Modals */
     .modal {
       display: none;
       position: fixed;
@@ -265,19 +257,19 @@
     }
 
     .hidden { display: none !important; }
-    .custom-div-icon { background: transparent !important; border: none !important; }
+    .geo-svg-marker { background: transparent !important; border: none !important; }
   </style>
 </head>
 <body>
 
 <header>
   <h1>Offline Structural Data Logger</h1>
-  <div class="header-sub">Geological Field Mapping Suite</div>
+  <div class="header-sub">Geological Field Mapping Suite &bull; v2.0</div>
 </header>
 
 <div class="wrap">
   
-  <!-- PROJECT & HEADER BAR WITH MAP ACCESS -->
+  <!-- PROJECT CONTROLS & POPUP MAP TRIGGER -->
   <div class="card" style="padding: 12px; background: #eef2f5; border-left: 5px solid var(--primary);">
     <div style="display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
       <div style="display: flex; gap: 8px; align-items: center; flex: 1; min-width: 260px;">
@@ -285,14 +277,13 @@
         <select id="projectIdSelect" onchange="switchProject()" style="flex: 1; font-weight: bold;"></select>
         <button type="button" onclick="createNewProject()" class="btn-ok btn-small">+ New</button>
       </div>
-      <!-- Map Button Relocated directly near Project ID -->
       <button type="button" onclick="openSpatialMap()" class="btn-map" style="font-weight: bold; width: auto;">
         🗺️ View Field Map & Traverse
       </button>
     </div>
   </div>
 
-  <!-- SECTION 1: SPATIAL CONTEXT & LOCATION -->
+  <!-- SECTION 1: SPATIAL CONTEXT & COORDINATES -->
   <details class="card" open>
     <summary class="section-title">📍 1. Spatial Context & Coordinates</summary>
     <div class="grid-layout">
@@ -314,13 +305,13 @@
       </div>
       <div class="form-group">
         <label>Location / Outcrop Description</label>
-        <input id="loc" placeholder="Village / Traverse section">
+        <input id="loc" placeholder="Village / Section details">
       </div>
     </div>
 
-    <!-- Lat/Lon Row with Inline GPS Sync Button -->
+    <!-- Lat/Long Row with Integrated GPS Sync -->
     <div class="grid-layout" style="align-items: flex-end; background: #fdfefe; border: 1px dashed #d5dbdb; padding: 10px; border-radius: var(--radius);">
-      <div class="form-group" style="grid-column: span 1;">
+      <div class="form-group">
         <label>Latitude & Longitude</label>
         <div class="compact-row">
           <input id="lat" placeholder="Latitude" step="any">
@@ -328,7 +319,7 @@
         </div>
       </div>
 
-      <div class="form-group" style="grid-column: span 1;">
+      <div class="form-group">
         <label>Elevation & GPS Error</label>
         <div class="compact-row">
           <input id="alt" readonly placeholder="Alt (m)">
@@ -351,19 +342,19 @@
 
   <!-- SECTION 2: LITHOLOGY & STRUCTURAL MEASUREMENTS -->
   <details class="card" open>
-    <summary class="section-title">⚒️ 2. Lithology & Structural Data</summary>
+    <summary class="section-title">⚒️ 2. Lithology & Structural Measurements</summary>
     <div class="grid-layout">
       <div class="form-group">
         <label>Lithology</label>
-        <input id="lith" placeholder="Quartzite, Mica Schist, Dolomite...">
+        <input id="lith" placeholder="Quartzite, Phyllite, Dolomite...">
       </div>
       <div class="form-group">
         <label>Mineralization</label>
-        <input id="mineralization" placeholder="Pyrite, Galena, Chalcopyrite">
+        <input id="mineralization" placeholder="Pyrite, Chalcopyrite, Galena">
       </div>
       <div class="form-group">
         <label>Alteration</label>
-        <input id="alteration" placeholder="Silicification, Sericitization">
+        <input id="alteration" placeholder="Silicification, Chloritization">
       </div>
     </div>
 
@@ -519,7 +510,7 @@
         <label>Photo Attachment Reference</label>
         <div style="display: flex; gap: 6px;">
           <input id="photo" placeholder="Photo Reference Tag">
-          <button type="button" onclick="document.getElementById('photoInput').click()" class="btn-sec btn-small" style="white-space: nowrap;">📷 Snap/Select</button>
+          <button type="button" onclick="document.getElementById('photoInput').click()" class="btn-sec btn-small" style="white-space: nowrap;">📷 Snap/Attach</button>
         </div>
         <input type="file" id="photoInput" accept="image/*" style="display:none;">
       </div>
@@ -527,16 +518,21 @@
       <div class="form-group">
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
           <input type="checkbox" id="takeSample" onchange="toggleSampleState()" style="width: auto; margin: 0;">
-          <strong>Sample Collected?</strong>
+          <strong>Collect Sample?</strong>
         </label>
         <select id="sampleType" disabled>
           <option>Bed Rock Sample</option>
           <option>Petrochemical Sample</option>
+          <option>Petrological Sample</option>
           <option>Chip Sample</option>
           <option>Channel Sample</option>
+          <option>Pit Sample</option>
+          <option>Trench Sample</option>
           <option>Stream Sediment Sample</option>
-          <option>Heavy Mineral Concentrate</option>
+          <option>Heavy Mineral Concentrate (HMC)</option>
           <option>Core Sample</option>
+          <option>Oriented Sample</option>
+          <option>Hand Specimen</option>
           <option>Other</option>
         </select>
       </div>
@@ -553,10 +549,10 @@
 
     <div class="form-group">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <label>Outcrop Remarks & Structural Synthesis</label>
+        <label>Field Remarks & Synthesis</label>
         <button type="button" onclick="startVoiceNote()" class="btn-sec btn-small" style="padding: 2px 8px; font-size: 11px;">🎤 Voice Note</button>
       </div>
-      <textarea id="remarks" rows="2" placeholder="Microstructures, porphyroclast rotation, bedding-cleavage intersections..."></textarea>
+      <textarea id="remarks" rows="2" placeholder="Microstructures, porphyroclast kinematics, alteration styles..."></textarea>
     </div>
 
     <!-- Live Preview Box -->
@@ -564,7 +560,7 @@
       <span class="fmt-preview">Awaiting structural entry...</span>
     </div>
 
-    <!-- Dominant Save Record Button & Smaller Reset Button -->
+    <!-- Dominant Save Record Button & Reset Button -->
     <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
       <button type="button" onclick="saveEntry()" class="btn-ok" style="font-size: 16px; padding: 12px;">
         💾 Save Record
@@ -577,7 +573,7 @@
     </div>
   </details>
 
-  <!-- SAVED DATA VIEWER -->
+  <!-- SAVED DATA VIEWER & BACKUP EXPORTS -->
   <div class="card">
     <div class="section-title">
       <span>📂 Saved Traverse Stations (<span id="count">0</span>)</span>
@@ -588,11 +584,23 @@
       </div>
     </div>
 
-    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+    <!-- Unified Export, Share & Database Action Row -->
+    <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; align-items: center;">
       <button type="button" onclick="exportCSV()" class="btn-small" style="background: #2980b9;">📊 CSV</button>
       <button type="button" onclick="exportKML()" class="btn-small" style="background: #8e44ad;">🌍 KML</button>
       <button type="button" onclick="exportGeoJSON()" class="btn-small" style="background: #27ae60;">🗺️ GeoJSON</button>
-      <!-- Safe Delete Selected with Timer Protection -->
+      
+      <!-- Native Share & WhatsApp -->
+      <button type="button" onclick="shareTraverseFile()" class="btn-small" style="background: #25D366; color: white;">
+        📲 Share (WhatsApp)
+      </button>
+      
+      <!-- Complete DB Local Backup / Restore -->
+      <button type="button" onclick="exportRawDatabase()" class="btn-small btn-sec">💾 Save DB</button>
+      <button type="button" onclick="document.getElementById('importDbFile').click()" class="btn-small btn-warn">📥 Restore DB</button>
+      <input type="file" id="importDbFile" accept=".json" style="display:none;" onchange="importRawDatabase(event)">
+
+      <!-- Protected Selection Deletion -->
       <button type="button" onclick="initiateDeleteSelected()" class="btn-danger btn-small" style="margin-left: auto;">
         🗑️ Delete Selected
       </button>
@@ -603,7 +611,7 @@
 
 </div>
 
-<!-- 1. MODAL: FIELD MAP & GPS TRACKING -->
+<!-- 1. POPUP MODAL: MAP, TRACKER & OVERLAYS -->
 <div id="mapModal" class="modal">
   <div id="mapContainer">
     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">
@@ -611,7 +619,7 @@
       <button type="button" onclick="closeSpatialMap()" class="btn-danger btn-small">✕ Close</button>
     </div>
 
-    <!-- GPS Live Track Recording Controls -->
+    <!-- Live GPS Tracking Console -->
     <div style="display: flex; gap: 8px; align-items: center; background: #ebf5fb; padding: 6px 10px; border-radius: 6px; margin-top: 8px; flex-wrap: wrap;">
       <span style="font-weight: bold; font-size: 12px; color: #2980b9;">🛰️ GPS Track:</span>
       <button type="button" id="startTrackBtn" onclick="toggleGpsTracking()" class="btn-ok btn-small">▶ Start Track</button>
@@ -619,9 +627,9 @@
       <span id="trackDistance" style="font-size: 12px; font-weight: bold; color: #2c3e50; margin-left: 6px;">Dist: 0.00 km</span>
     </div>
 
-    <!-- Raster / KML Overlay Controls Accordion -->
+    <!-- Raster Map & Vector KML Overlays -->
     <details style="margin-top:6px; background:#f8f9f9; padding:6px 10px; border-radius:6px; border:1px solid var(--border);">
-      <summary style="font-weight:bold; font-size:12px; cursor:pointer; color:var(--primary);">📁 Overlays & Geofence (KML / Scanned Maps)</summary>
+      <summary style="font-weight:bold; font-size:12px; cursor:pointer; color:var(--primary);">📁 Overlays & Geofence Boundary</summary>
       <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
         <input type="file" id="kmlOverlayFile" accept=".kml" style="font-size:11px; width: 180px;">
         <button type="button" onclick="applyKMLOverlay()" class="btn-small" style="background:#8e44ad;">Add KML</button>
@@ -633,7 +641,7 @@
         <input id="ovMaxLat" type="number" step="any" placeholder="NE Lat" style="width:65px; padding:3px;">
         <input id="ovMinLon" type="number" step="any" placeholder="SW Lon" style="width:65px; padding:3px;">
         <input id="ovMaxLon" type="number" step="any" placeholder="NE Lon" style="width:65px; padding:3px;">
-        <button type="button" onclick="applyCustomMapOverlay()" class="btn-small btn-ok">Load Map</button>
+        <button type="button" onclick="applyCustomMapOverlay()" class="btn-small btn-ok">Load Raster</button>
         <button type="button" onclick="removeCustomMapOverlay()" class="btn-small btn-danger">Unload</button>
       </div>
     </details>
@@ -642,7 +650,7 @@
   </div>
 </div>
 
-<!-- 2. MODAL: EDIT STATION DATA IN-MAP -->
+<!-- 2. POPUP MODAL: IN-MAP STATION DATA EDITING -->
 <div id="editModal" class="modal">
   <div class="dialog-box">
     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 8px; margin-bottom: 12px;">
@@ -652,7 +660,7 @@
     <input type="hidden" id="editRecordId">
     
     <div class="form-group" style="margin-bottom: 8px;">
-      <label>Location No / Tag</label>
+      <label>Station Number / Tag</label>
       <input id="editLocNo">
     </div>
     <div class="form-group" style="margin-bottom: 8px;">
@@ -674,11 +682,11 @@
       </div>
     </div>
     <div class="form-group" style="margin-bottom: 8px;">
-      <label>Mineralization / Alteration</label>
-      <input id="editMinAlt">
+      <label>Mineralization</label>
+      <input id="editMineralization">
     </div>
     <div class="form-group" style="margin-bottom: 12px;">
-      <label>Field Remarks & Synthesis</label>
+      <label>Field Remarks</label>
       <textarea id="editRemarks" rows="3"></textarea>
     </div>
     <div style="display: flex; justify-content: flex-end; gap: 8px;">
@@ -688,7 +696,7 @@
   </div>
 </div>
 
-<!-- 3. MODAL: 50-SECOND TIMER SAFE DELETE -->
+<!-- 3. POPUP MODAL: 50-SECOND TIMER SAFEGUARD -->
 <div id="deleteConfirmModal" class="modal">
   <div class="dialog-box" style="border: 2px solid var(--danger);">
     <h3 style="color: var(--danger); margin-top: 0;">⚠️ Irreversible Deletion Warning</h3>
@@ -696,11 +704,11 @@
       Deleted records can never be undone again, make sure you have exported data!
     </p>
     <p style="font-size: 12px; color: #555;">
-      Stations to delete: <span id="deleteSelectedCount" style="font-weight: bold; color: var(--danger);">0</span>
+      Stations marked for deletion: <span id="deleteSelectedCount" style="font-weight: bold; color: var(--danger);">0</span>
     </p>
     <div style="text-align: center; margin: 15px 0;">
-      <div style="font-size: 28px; font-weight: bold; color: var(--danger);" id="deleteCountdownTimer">50s</div>
-      <span style="font-size: 11px; color: #7f8c8d;">Wait until safety timer unlocks</span>
+      <div style="font-size: 32px; font-weight: bold; color: var(--danger);" id="deleteCountdownTimer">50s</div>
+      <span style="font-size: 11px; color: #7f8c8d;">Safety timer counting down...</span>
     </div>
     <div style="display: flex; gap: 10px; justify-content: flex-end;">
       <button type="button" onclick="abortDeletion()" class="btn-sec btn-small">Cancel & Abort</button>
@@ -711,7 +719,7 @@
   </div>
 </div>
 
-<!-- Centralized Script Engine -->
-<script src="app.js?v=1.1.0"></script>
+<!-- Main Script Engine Loaded Once -->
+<script src="app.js?v=v2.0"></script>
 </body>
 </html>
