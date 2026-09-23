@@ -1,7 +1,7 @@
 {
-  "id": "geologger-v1",
-  "name": "Offline Structural Data Logger",
-  "short_name": "GeoLogger v1",
+  "id": "geologger-v2",
+  "name": "Offline Structural Data Logger v2",
+  "short_name": "GeoLogger v2",
   "description": "Field-ready geological structural data and spatial logger by Being_Geologist, for data entry in field.",
   "start_url": "./index.html",
   "scope": "./",
