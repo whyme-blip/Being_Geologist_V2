@@ -966,7 +966,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Pre-warm the phone's GNSS satellite antenna upon opening the app
   if (typeof getGPS === 'function') {
-    setTimeout(getGPS, 800);
   }
 });
 
