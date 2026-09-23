@@ -296,7 +296,56 @@ function saveEntry() {
   if (typeof getGPS === 'function') getGPS();
 }
 
+// ==========================================
+// PHOTO ATTACHMENT & SEQUENTIAL NAMING ENGINE 
+// ==========================================
+let currentStationPhotos = [];
+
+function handlePhotoCapture(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+
+  const locNo = val('locNo') || 'STATION';
+  const photoInputDisplay = document.getElementById('photo');
+
+  Array.from(files).forEach((file) => {
+    const photoIndex = currentStationPhotos.length + 1;
+    const formattedPhotoName = `${locNo} (${photoIndex})`;
+
+    currentStationPhotos.push(formattedPhotoName);
+
+    // Downloads the photo directly to phone with the sequential station name
+    savePhotoToDevice(file, `${formattedPhotoName}.jpg`);
+  });
+
+  if (photoInputDisplay) {
+    photoInputDisplay.value = currentStationPhotos.join(', ');
+  }
+
+  updatePreview();
+
+  // Reset the input value so user can snap additional photos at the same station
+  event.target.value = '';
+}
+
+function savePhotoToDevice(file, filename) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function clearForm(resetDate = true) {
+  // Step 2: Reset the active photo tracker array for the next station
+  currentStationPhotos = [];
+  const photoEl = document.getElementById('photo');
+  if (photoEl && resetDate) photoEl.value = '';
+
   const retainKeys = resetDate ? [] : ['loc', 'lith', 'unit', 'lat', 'lon', 'alt', 'accuracy'];
   ids.forEach(id => {
     if (!retainKeys.includes(id) && id !== 'locPrefix' && id !== 'samplePrefix' && id !== 'locNo' && id !== 'type') {
@@ -1012,6 +1061,56 @@ function startVoiceNote() {
     document.getElementById('remarks').value += ' ' + e.results[0][0].transcript;
   };
   rec.start();
+}
+
+// ==========================================
+// 12.1 PHOTO ATTACHMENT & SEQUENTIAL NAMING ENGINE
+// ==========================================
+// Array to keep track of photo tags taken for the current station
+let currentStationPhotos = [];
+
+function handlePhotoCapture(event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+
+  const locNo = val('locNo') || 'STATION';
+  const photoInputDisplay = document.getElementById('photo');
+
+  // Process each captured image
+  Array.from(files).forEach((file) => {
+    // Increment the sequence count for this station
+    const photoIndex = currentStationPhotos.length + 1;
+    const formattedPhotoName = `${locNo} (${photoIndex})`;
+
+    // Track tag in local array
+    currentStationPhotos.push(formattedPhotoName);
+
+    // Save/Download directly to phone with the station name: e.g., "JU-002 (1).jpg"
+    savePhotoToDevice(file, `${formattedPhotoName}.jpg`);
+  });
+
+  // Display comma-separated list of tags in the input box
+  if (photoInputDisplay) {
+    photoInputDisplay.value = currentStationPhotos.join(', ');
+  }
+
+  updatePreview();
+
+  // Reset the input so taking another photo triggers 'change' event cleanly
+  event.target.value = '';
+}
+
+function savePhotoToDevice(file, filename) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename; // Sets custom filename: e.g., JU-002 (1).jpg
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  // Clean up object URL after a short delay
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ==========================================
