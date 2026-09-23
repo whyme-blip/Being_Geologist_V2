@@ -24,7 +24,7 @@ let trackWatchId = null;
 let gpsTrackPoints = JSON.parse(localStorage.getItem('gpsTraverseTrack') || '[]');
 let gpsTrackPolyline = null;
 
-// Countdown State
+// 50-Second Countdown State
 let deleteCountdownVal = 50;
 let deleteTimerInterval = null;
 let recordsPendingDeletion = [];
@@ -37,7 +37,7 @@ const ids = [
 ];
 
 // ==========================================
-// 2. CORE GEOLOGICAL & FORMATTING UTILITIES
+// 2. CORE STRUCTURAL & FORMATTING HELPERS
 // ==========================================
 function isLinear(typeStr) {
   const t = (typeStr || '').toLowerCase();
@@ -111,7 +111,7 @@ function createNewProject() {
 }
 
 // ==========================================
-// 4. PREVIEW & STRUCTURAL CALCULATIONS
+// 4. CALCULATION & LIVE PREVIEW UTILITIES
 // ==========================================
 function fmt() {
   let t = val('type');
@@ -202,7 +202,7 @@ function calculateLineationFromPitch() {
 }
 
 // ==========================================
-// 5. GPS SYNCHRONIZATION ENGINE
+// 5. GPS POSITIONING ENGINE
 // ==========================================
 function getGPS() {
   const latField = document.getElementById('lat');
@@ -211,7 +211,7 @@ function getGPS() {
   const altField = document.getElementById('alt');
 
   if (!navigator.geolocation) {
-    alert('Geolocation is unsupported by your browser/device.');
+    alert('GPS Engine Error: Geolocation APIs are unsupported by this browser.');
     return;
   }
 
@@ -230,7 +230,7 @@ function getGPS() {
       if (latField) latField.value = '';
       if (lonField) lonField.value = '';
       if (accField) accField.value = 'Error';
-      alert('GPS Signal Lock Failed: ' + err.message);
+      alert('GPS Signal Failure: ' + err.message);
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
   );
@@ -261,7 +261,6 @@ function saveEntry() {
 
   records.unshift(r);
 
-  // Increment Location Counter
   const locMode = document.getElementById('locCountMode')?.value || 'continue';
   let lCounter = parseInt(localStorage.getItem('locationCounter') || '1', 10);
   if (locMode === 'continue') {
@@ -334,13 +333,13 @@ function toggleRecordSelection(id, isSelected) {
 }
 
 // ==========================================
-// 7. 50-SECOND SAFE DELETION SYSTEM
+// 7. 50-SECOND TIMER SAFE DELETION
 // ==========================================
 function initiateDeleteSelected() {
   recordsPendingDeletion = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId && r.selectedForDelete);
   
   if (recordsPendingDeletion.length === 0) {
-    alert("No records selected! Check the box next to any station you wish to delete.");
+    alert("No records selected! Please check the box next to any station you wish to delete.");
     return;
   }
 
@@ -394,7 +393,70 @@ function abortDeletion() {
 }
 
 // ==========================================
-// 8. POPUP MAP & IN-MAP STATION EDITING
+// 8. DYNAMIC SVG SYMBOLS FOR LEAFLET
+// ==========================================
+function getPlanarSvgIcon(strike, dip, type) {
+  const strikeDeg = parseFloat(strike) || 0;
+  const dipVal = (dip !== undefined && dip !== '') ? dip : '';
+  const structColor = getStructureColor(type);
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+      <g transform="rotate(${strikeDeg}, 20, 20)">
+        <line x1="6" y1="20" x2="34" y2="20" stroke="${structColor}" stroke-width="3" stroke-linecap="round" />
+        <line x1="20" y1="20" x2="20" y2="28" stroke="${structColor}" stroke-width="2.5" stroke-linecap="round" />
+        <circle cx="20" cy="20" r="2" fill="${structColor}" />
+      </g>
+      <text x="24" y="14" font-size="11" font-weight="bold" fill="${structColor}" font-family="monospace">${dipVal}</text>
+    </svg>
+  `;
+
+  return L.divIcon({
+    html: svg,
+    className: 'geo-svg-marker',
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+    popupAnchor: [0, -10]
+  });
+}
+
+function getLinearSvgIcon(trend, plunge, type) {
+  const trendDeg = parseFloat(trend) || 0;
+  const plungeVal = (plunge !== undefined && plunge !== '') ? plunge : '';
+  const strokeColor = getStructureColor(type || 'Lineation');
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+      <g transform="rotate(${trendDeg}, 20, 20)">
+        <line x1="20" y1="32" x2="20" y2="8" stroke="${strokeColor}" stroke-width="2.5" stroke-linecap="round" />
+        <path d="M 15 14 L 20 6 L 25 14" fill="none" stroke="${strokeColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="20" cy="20" r="2" fill="${strokeColor}" />
+      </g>
+      <text x="24" y="34" font-size="11" font-weight="bold" fill="${strokeColor}" font-family="monospace">${plungeVal}°</text>
+    </svg>
+  `;
+
+  return L.divIcon({
+    html: svg,
+    className: 'geo-svg-marker',
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+    popupAnchor: [0, -10]
+  });
+}
+
+function getStructureColor(type) {
+  const structType = type || '';
+  if (structType.includes('Foliation') || structType.includes('S1') || structType.includes('S2')) return '#e67e22';
+  if (structType.includes('Joint')) return '#27ae60';
+  if (structType.includes('Fault') || structType.includes('Shear')) return '#c0392b';
+  if (structType.includes('Bedding') || structType.includes('S0')) return '#2980b9';
+  if (structType.includes('Lineation') || structType.includes('Fold')) return '#8e44ad';
+  return '#2c3e50';
+}
+
+// ==========================================
+// 9. POPUP MAP & IN-MAP STATION EDITING
 // ==========================================
 function openSpatialMap() {
   const modal = document.getElementById('mapModal');
@@ -440,15 +502,14 @@ function updateMapDisplay() {
 
   validRecords.forEach(r => {
     const latlng = [parseFloat(r.lat), parseFloat(r.lon)];
-    const marker = L.circleMarker(latlng, {
-      radius: 7,
-      fillColor: '#e67e22',
-      color: '#ffffff',
-      weight: 2,
-      fillOpacity: 0.9
-    });
+    let marker;
 
-    // In-Map Station Popup with Edit Button
+    if (isLinear(r.type) || (r.trend && r.plunge && !r.strike)) {
+      marker = L.marker(latlng, { icon: getLinearSvgIcon(r.trend || r.linTrend, r.plunge || r.linPlunge, r.type) });
+    } else {
+      marker = L.marker(latlng, { icon: getPlanarSvgIcon(r.strike, r.dip, r.type || 'Bedding') });
+    }
+
     const popupHtml = `
       <div style="font-size:12px; font-family:sans-serif; min-width:180px;">
         <div style="font-weight:bold; font-size:13px; color:#1f3a5f; border-bottom:1px solid #ddd; padding-bottom:3px; margin-bottom:4px;">
@@ -469,7 +530,6 @@ function updateMapDisplay() {
   });
 }
 
-// In-Map Station Edit Functionality
 function openStationEdit(id) {
   const rec = records.find(r => r.id === id);
   if (!rec) return;
@@ -480,7 +540,7 @@ function openStationEdit(id) {
   document.getElementById('editUnit').value = rec.unit || '';
   document.getElementById('editStrikeTrend').value = rec.strike || rec.trend || '';
   document.getElementById('editDipPlunge').value = rec.dip || rec.plunge || '';
-  document.getElementById('editMinAlt').value = (rec.mineralization || '') + (rec.alteration ? `, ${rec.alteration}` : '');
+  document.getElementById('editMineralization').value = rec.mineralization || '';
   document.getElementById('editRemarks').value = rec.remarks || '';
 
   const editModal = document.getElementById('editModal');
@@ -507,16 +567,17 @@ function saveStationEdit() {
     rec.strike = document.getElementById('editStrikeTrend').value;
     rec.dip = document.getElementById('editDipPlunge').value;
   }
+  rec.mineralization = document.getElementById('editMineralization').value;
   rec.remarks = document.getElementById('editRemarks').value;
 
   persist();
   closeEditModal();
   render();
-  alert("Station data updated successfully!");
+  alert("Station updated successfully!");
 }
 
 // ==========================================
-// 9. LIVE GPS TRACK RECORDER
+// 10. GPS TRAVERSE RECORDER
 // ==========================================
 function toggleGpsTracking() {
   const btn = document.getElementById('startTrackBtn');
@@ -555,19 +616,16 @@ function renderStoredGpsTrack() {
   if (!gpsTrackPolyline) return;
   gpsTrackPolyline.setLatLngs(gpsTrackPoints);
   
-  // Calculate Traverse Distance
   let totalMeters = 0;
   for (let i = 1; i < gpsTrackPoints.length; i++) {
-    const from = L.latLng(gpsTrackPoints[i - 1]);
-    const to = L.latLng(gpsTrackPoints[i]);
-    totalMeters += from.distanceTo(to);
+    totalMeters += L.latLng(gpsTrackPoints[i - 1]).distanceTo(L.latLng(gpsTrackPoints[i]));
   }
   const distEl = document.getElementById('trackDistance');
   if (distEl) distEl.textContent = `Dist: ${(totalMeters / 1000).toFixed(2)} km`;
 }
 
 function clearGpsTrack() {
-  if (confirm("Clear recorded GPS track points?")) {
+  if (confirm("Clear recorded traverse GPS breadcrumbs?")) {
     gpsTrackPoints = [];
     localStorage.removeItem('gpsTraverseTrack');
     renderStoredGpsTrack();
@@ -575,7 +633,101 @@ function clearGpsTrack() {
 }
 
 // ==========================================
-// 10. EXPORTERS & EVENT LISTENERS
+// 11. OVERLAYS (KML & SCANNED MAPS)
+// ==========================================
+function kmlToGeoJson(xmlDoc) {
+  const features = [];
+  const placemarks = xmlDoc.getElementsByTagName("Placemark");
+
+  for (let i = 0; i < placemarks.length; i++) {
+    const pm = placemarks[i];
+    const name = pm.getElementsByTagName("name")[0]?.textContent || `Feature ${i + 1}`;
+    const desc = pm.getElementsByTagName("description")[0]?.textContent || "";
+
+    const point = pm.getElementsByTagName("Point")[0];
+    if (point) {
+      const coords = point.getElementsByTagName("coordinates")[0]?.textContent.trim().split(',');
+      if (coords && coords.length >= 2) {
+        features.push({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [parseFloat(coords[0]), parseFloat(coords[1])] },
+          properties: { name, desc }
+        });
+      }
+    }
+  }
+  return { type: "FeatureCollection", features };
+}
+
+function applyKMLOverlay() {
+  const fileInput = document.getElementById('kmlOverlayFile');
+  const file = fileInput ? fileInput.files[0] : null;
+  if (!file || !mapInstance) return;
+
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    try {
+      const xmlDoc = new DOMParser().parseFromString(e.target.result, "text/xml");
+      const geojson = kmlToGeoJson(xmlDoc);
+      removeKMLOverlay(false);
+
+      kmlMapOverlayLayer = L.geoJSON(geojson, {
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 6, fillColor: '#8e44ad', color: '#fff', weight: 1.5, fillOpacity: 0.85 })
+      }).addTo(mapInstance);
+
+      if (kmlMapOverlayLayer.getBounds().isValid()) mapInstance.fitBounds(kmlMapOverlayLayer.getBounds());
+      alert("KML Overlaid!");
+    } catch (err) {
+      alert("KML Error: " + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function removeKMLOverlay(showAlert = true) {
+  if (kmlMapOverlayLayer && mapInstance) {
+    mapInstance.removeLayer(kmlMapOverlayLayer);
+    kmlMapOverlayLayer = null;
+    if (showAlert) alert("KML Overlay cleared.");
+  }
+}
+
+function applyCustomMapOverlay() {
+  const fileInput = document.getElementById('customMapFile');
+  const file = fileInput ? fileInput.files[0] : null;
+  if (!file) { alert('Select an image file first.'); return; }
+
+  let minLat = parseFloat(document.getElementById('ovMinLat')?.value);
+  let maxLat = parseFloat(document.getElementById('ovMaxLat')?.value);
+  let minLon = parseFloat(document.getElementById('ovMinLon')?.value);
+  let maxLon = parseFloat(document.getElementById('ovMaxLon')?.value);
+
+  if (isNaN(minLat) || isNaN(maxLat) || isNaN(minLon) || isNaN(maxLon)) {
+    alert('Please enter valid bounding coordinates.');
+    return;
+  }
+
+  const bounds = [[minLat, minLon], [maxLat, maxLon]];
+  removeCustomMapOverlay();
+
+  currentOverlayUrl = URL.createObjectURL(file);
+  customOverlayLayer = L.imageOverlay(currentOverlayUrl, bounds, { opacity: 0.8 }).addTo(mapInstance);
+  mapInstance.fitBounds(bounds);
+}
+
+function removeCustomMapOverlay() {
+  if (customOverlayLayer && mapInstance) {
+    mapInstance.removeLayer(customOverlayLayer);
+    customOverlayLayer = null;
+  }
+  if (currentOverlayUrl) {
+    URL.revokeObjectURL(currentOverlayUrl);
+    currentOverlayUrl = null;
+  }
+}
+
+// ==========================================
+// 12. DATA EXPORTS & BACKUPS (WhatsApp / DB)
 // ==========================================
 function exportCSV() {
   const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
@@ -606,6 +758,73 @@ function exportKML() {
   });
   kml += `</Document></kml>`;
   download(`traverse_${activeProjectId}.kml`, kml, 'application/vnd.google-earth.kml+xml');
+}
+
+async function shareTraverseFile() {
+  const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
+  if (projectRecords.length === 0) { alert("No records available to share."); return; }
+
+  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks'];
+  const csvContent = [cols.join(',')].concat(
+    projectRecords.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','))
+  ).join('\n');
+
+  const fileName = `Traverse_${activeProjectId}_${new Date().toISOString().slice(0,10)}.csv`;
+  const file = new File([csvContent], fileName, { type: 'text/csv' });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: `Field Data: ${activeProjectId}`,
+        text: `Traverse backup for project ${activeProjectId}`
+      });
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error('Share error:', err);
+    }
+  } else {
+    download(fileName, csvContent, 'text/csv');
+    alert("Native sharing unavailable. File saved to Downloads.");
+  }
+}
+
+function exportRawDatabase() {
+  if (records.length === 0) { alert("No records in database."); return; }
+  const dbDump = {
+    backupDate: new Date().toISOString(),
+    activeProjectId,
+    projectList: projects,
+    records
+  };
+  download(`GeoLogger_DB_${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(dbDump, null, 2), 'application/json');
+}
+
+function importRawDatabase(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data && Array.isArray(data.records)) {
+        if (confirm(`Restore ${data.records.length} records from backup file? Existing records will be merged safely.`)) {
+          const existingIds = new Set(records.map(r => r.id));
+          data.records.forEach(r => {
+            if (!existingIds.has(r.id)) records.push(r);
+          });
+          persist();
+          render();
+          alert("Database successfully restored!");
+        }
+      } else {
+        alert("Invalid file format.");
+      }
+    } catch (err) {
+      alert("Import Failed: " + err.message);
+    }
+  };
+  reader.readAsText(file);
 }
 
 function download(name, content, type) {
@@ -661,7 +880,7 @@ function toggleSampleState() {
 }
 
 function setSampleCounter() {
-  const input = prompt("Set next sample sequence number:");
+  const input = prompt("Set next starting sample sequence number:");
   if (input !== null) {
     localStorage.setItem('sampleCounter', parseInt(input, 10) || 1);
     toggleSampleState();
@@ -678,7 +897,9 @@ function startVoiceNote() {
   rec.start();
 }
 
-// Initializer
+// ==========================================
+// 13. DOM BINDINGS & SW INIT
+// ==========================================
 document.addEventListener('DOMContentLoaded', () => {
   const dateEl = document.getElementById('date');
   if (dateEl && !dateEl.value) dateEl.valueAsDate = new Date();
@@ -724,6 +945,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(err => console.error(err));
+    navigator.serviceWorker.register('./sw.js')
+      .then(reg => {
+        reg.onupdatefound = () => {
+          const installingWorker = reg.installing;
+          installingWorker.onstatechange = () => {
+            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              if (confirm('Version 2.0 available! Reload to apply updates?')) {
+                window.location.reload();
+              }
+            }
+          };
+        };
+      })
+      .catch(err => console.error('SW Error:', err));
   });
 }
