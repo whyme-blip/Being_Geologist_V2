@@ -536,13 +536,16 @@
     <summary class="section-title">📦 3. Samples & Outcrop Observations</summary>
     <div class="grid-layout">
       <div class="form-group">
-        <label>Photo Attachment Reference</label>
-        <div style="display: flex; gap: 6px;">
-          <input id="photo" placeholder="Photo Reference Tag">
-          <button type="button" onclick="document.getElementById('photoInput').click()" class="btn-sec btn-small" style="white-space: nowrap;">📷 Snap/Attach</button>
-        </div>
-        <input type="file" id="photoInput" accept="image/*" style="display:none;">
-      </div>
+  <label>Photo Attachment Reference</label>
+   <div style="display: flex; gap: 6px;">
+     <input id="photo" placeholder="e.g., JU-002 (1), JU-002 (2)" readonly>
+     <button type="button" onclick="document.getElementById('photoInput').click()" class="btn-sec btn-small" style="white-space: nowrap;">
+      📷 Snap/Attach
+     </button>
+   </div>
+  <!-- Added capture="environment" for rear camera & multiple to take multiple photos -->
+   <input type="file" id="photoInput" accept="image/*" capture="environment" multiple style="display:none;" onchange="handlePhotoCapture(event)">
+ </div>
 
       <div class="form-group">
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
