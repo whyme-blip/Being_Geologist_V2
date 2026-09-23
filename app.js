@@ -202,7 +202,7 @@ function calculateLineationFromPitch() {
 }
 
 // ==========================================
-// 5. GPS POSITIONING ENGINE
+// 5. GPS POSITIONING ENGINE (WITH FALLBACK)
 // ==========================================
 function getGPS() {
   const latField = document.getElementById('lat');
@@ -219,23 +219,40 @@ function getGPS() {
   if (lonField) lonField.value = 'Syncing...';
   if (accField) accField.value = '...';
 
+  function applyPosition(p) {
+    if (latField) latField.value = p.coords.latitude.toFixed(6);
+    if (lonField) lonField.value = p.coords.longitude.toFixed(6);
+    if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
+    if (altField) altField.value = (p.coords.altitude !== null && !isNaN(p.coords.altitude)) ? p.coords.altitude.toFixed(1) : 'N/A';
+    if (typeof updatePreview === 'function') updatePreview();
+  }
+
+  function handleFinalError(err) {
+    if (latField) latField.value = '';
+    if (lonField) lonField.value = '';
+    if (accField) accField.value = 'Error';
+    alert('GPS Signal Failure: ' + err.message + ' (Check site location permission or move outdoors).');
+  }
+
+  // Attempt 1: High Accuracy (Satellite Fix)
   navigator.geolocation.getCurrentPosition(
-    p => {
-      if (latField) latField.value = p.coords.latitude.toFixed(6);
-      if (lonField) lonField.value = p.coords.longitude.toFixed(6);
-      if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
-      if (altField) altField.value = p.coords.altitude ? p.coords.altitude.toFixed(1) : 'N/A';
+    applyPosition,
+    function (err) {
+      // If Attempt 1 times out (code 3) or is unavailable (code 2), fall back to standard accuracy
+      if (err.code === 3 || err.code === 2) {
+        if (accField) accField.value = 'Retrying...';
+        navigator.geolocation.getCurrentPosition(
+          applyPosition,
+          handleFinalError,
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+        );
+      } else {
+        handleFinalError(err);
+      }
     },
-    err => {
-      if (latField) latField.value = '';
-      if (lonField) lonField.value = '';
-      if (accField) accField.value = 'Error';
-      alert('GPS Signal Failure: ' + err.message);
-    },
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 10000 }
   );
 }
-
 // ==========================================
 // 6. RECORD LOGGING & MANAGEMENT
 // ==========================================
