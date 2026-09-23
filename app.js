@@ -202,8 +202,10 @@ function calculateLineationFromPitch() {
 }
 
 // ==========================================
-// 5. GPS POSITIONING ENGINE (WITH FALLBACK)
+// 5. GPS POSITIONING ENGINE (PROGRESSIVE WARM-UP)
 // ==========================================
+let gpsWatchSession = null;
+
 function getGPS() {
   const latField = document.getElementById('lat');
   const lonField = document.getElementById('lon');
@@ -211,46 +213,82 @@ function getGPS() {
   const altField = document.getElementById('alt');
 
   if (!navigator.geolocation) {
-    alert('GPS Engine Error: Geolocation APIs are unsupported by this browser.');
+    alert('GPS Engine Error: Geolocation APIs are unsupported.');
     return;
   }
 
-  if (latField) latField.value = 'Syncing...';
-  if (lonField) lonField.value = 'Syncing...';
-  if (accField) accField.value = '...';
-
-  function applyPosition(p) {
-    if (latField) latField.value = p.coords.latitude.toFixed(6);
-    if (lonField) lonField.value = p.coords.longitude.toFixed(6);
-    if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
-    if (altField) altField.value = (p.coords.altitude !== null && !isNaN(p.coords.altitude)) ? p.coords.altitude.toFixed(1) : 'N/A';
-    if (typeof updatePreview === 'function') updatePreview();
+  // Clear any existing GPS poll in progress
+  if (gpsWatchSession) {
+    navigator.geolocation.clearWatch(gpsWatchSession);
+    gpsWatchSession = null;
   }
 
-  function handleFinalError(err) {
-    if (latField) latField.value = '';
-    if (lonField) lonField.value = '';
-    if (accField) accField.value = 'Error';
-    alert('GPS Signal Failure: ' + err.message + ' (Check site location permission or move outdoors).');
+  if (latField) latField.value = 'Locking...';
+  if (lonField) lonField.value = 'Locking...';
+  if (accField) accField.value = 'Acquiring...';
+
+  let bestPosition = null;
+  let attempts = 0;
+  const maxAttempts = 10; // Samples before accepting best fix
+
+  // Hard safety timeout after 14 seconds
+  const sessionTimeout = setTimeout(() => {
+    finishGpsFix();
+  }, 14000);
+
+  function finishGpsFix() {
+    if (gpsWatchSession) {
+      navigator.geolocation.clearWatch(gpsWatchSession);
+      gpsWatchSession = null;
+    }
+    clearTimeout(sessionTimeout);
+
+    if (bestPosition) {
+      const p = bestPosition;
+      if (latField) latField.value = p.coords.latitude.toFixed(6);
+      if (lonField) lonField.value = p.coords.longitude.toFixed(6);
+      if (accField) accField.value = Math.round(p.coords.accuracy) + 'm';
+      if (altField) altField.value = (p.coords.altitude !== null && !isNaN(p.coords.altitude)) ? p.coords.altitude.toFixed(1) : 'N/A';
+      if (typeof updatePreview === 'function') updatePreview();
+
+      if (p.coords.accuracy > 30) {
+        console.warn(`Moderate accuracy (${Math.round(p.coords.accuracy)}m). Ensure sky visibility.`);
+      }
+    } else {
+      if (latField) latField.value = '';
+      if (lonField) lonField.value = '';
+      if (accField) accField.value = 'Timeout';
+      alert('Unable to lock GPS satellites. Ensure location permissions are active and test outdoors.');
+    }
   }
 
-  // Attempt 1: High Accuracy (Satellite Fix)
-  navigator.geolocation.getCurrentPosition(
-    applyPosition,
-    function (err) {
-      // If Attempt 1 times out (code 3) or is unavailable (code 2), fall back to standard accuracy
-      if (err.code === 3 || err.code === 2) {
-        if (accField) accField.value = 'Retrying...';
-        navigator.geolocation.getCurrentPosition(
-          applyPosition,
-          handleFinalError,
-          { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
-        );
-      } else {
-        handleFinalError(err);
+  gpsWatchSession = navigator.geolocation.watchPosition(
+    (pos) => {
+      attempts++;
+      const currentAcc = pos.coords.accuracy;
+
+      // Update intermediate readout so user sees satellite lock improving
+      if (accField) accField.value = `±${Math.round(currentAcc)}m...`;
+
+      // Track the most accurate fix received so far
+      if (!bestPosition || currentAcc < bestPosition.coords.accuracy) {
+        bestPosition = pos;
+      }
+
+      // If satellite lock reaches field tolerance (<= 15 meters) or reached max samples
+      if (currentAcc <= 15 || attempts >= maxAttempts) {
+        finishGpsFix();
       }
     },
-    { enableHighAccuracy: true, timeout: 12000, maximumAge: 10000 }
+    (err) => {
+      console.warn('GPS Watch Error: ' + err.message);
+      finishGpsFix();
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0 // Do not use stale cached cell positions
+    }
   );
 }
 // ==========================================
