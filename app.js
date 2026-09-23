@@ -508,9 +508,12 @@ function getPlanarSvgIcon(strike, dip, type) {
   const dipVal = (dip !== undefined && dip !== '') ? dip : '';
   const structColor = getStructureColor(type);
 
+  // Apply -90° offset: horizontal line (East-West at 0°) aligns to True North (000°)
+  const planarRotation = (strikeDeg - 90 + 360) % 360;
+
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-      <g transform="rotate(${strikeDeg}, 20, 20)">
+      <g transform="rotate(${planarRotation}, 20, 20)">
         <line x1="6" y1="20" x2="34" y2="20" stroke="${structColor}" stroke-width="3" stroke-linecap="round" />
         <line x1="20" y1="20" x2="20" y2="28" stroke="${structColor}" stroke-width="2.5" stroke-linecap="round" />
         <circle cx="20" cy="20" r="2" fill="${structColor}" />
@@ -533,6 +536,7 @@ function getLinearSvgIcon(trend, plunge, type) {
   const plungeVal = (plunge !== undefined && plunge !== '') ? plunge : '';
   const strokeColor = getStructureColor(type || 'Lineation');
 
+  // Linear arrow drawn vertically pointing North (y: 32 -> 8); standard rotate(${trendDeg}) points to azimuth
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
       <g transform="rotate(${trendDeg}, 20, 20)">
