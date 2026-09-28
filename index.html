@@ -522,7 +522,7 @@
         <label>Kinematic Direction</label>
         <input id="movementDir" placeholder="e.g. Top-to-SW">
       </div>
-      <div class="form-group" style="justify-content: flex-end;">
+<div class="form-group" style="justify-content: flex-end;">
         <button type="button" id="toggleLineationBtn" onclick="toggleLineationSection()" class="btn-sec btn-small" style="height: 36px;">
           ➕ Associated Lineation (Pitch / Rake)
         </button>
@@ -536,37 +536,50 @@
       </div>
       <div class="grid-layout" style="margin-bottom: 6px;">
         <div class="form-group">
-          <label>Lineation Type</label>
-          <select id="linType">
+          <label for="linType">Lineation Type</label>
+          <select id="linType" onchange="handleLinTypeChange(); updatePreview();">
             <option value="">-- Select --</option>
-            <option>L1 Lineation</option>
-            <option>L2 Lineation</option>
-            <option>Mineral Lineation</option>
-            <option>Slickenline / Striae</option>
-            <option>Fold Axis Lineation</option>
-            <option>Stretching Lineation</option>
+            <option value="L1 Lineation">L1 Lineation</option>
+            <option value="L2 Lineation">L2 Lineation</option>
+            <option value="Mineral Lineation">Mineral Lineation</option>
+            <option value="Slickenline / Striae">Slickenline / Striae</option>
+            <option value="Fold Axis Lineation">Fold Axis Lineation</option>
+            <option value="Stretching Lineation">Stretching Lineation</option>
+            <option value="Intersection Lineation">Intersection Lineation</option>
+            <option value="Pebble Elongation">Pebble Elongation</option>
+            <option value="Pucker / Crenulation">Pucker / Crenulation</option>
+            <option value="Other">Other</option>
           </select>
         </div>
-        <div class="form-group">
-          <label>Pitch / Rake (°)</label>
-          <input id="linRake" type="number" min="0" max="90" placeholder="e.g., 25" oninput="calculateLineationFromPitch()">
+
+        <!-- DYNAMIC CUSTOM LINEATION INPUT -->
+        <div id="customLinTypeDiv" class="form-group hidden">
+          <label for="customLinType">Custom Lineation Name</label>
+          <input id="customLinType" type="text" placeholder="e.g., Quartz Ribbon, Mullion" oninput="updatePreview()">
         </div>
+
         <div class="form-group">
-          <label>Pitch Measured From</label>
+          <label for="linRake">Pitch / Rake (°)</label>
+          <input id="linRake" type="number" min="0" max="90" step="any" placeholder="0 to 90" oninput="calculateLineationFromPitch()">
+        </div>
+
+        <div class="form-group">
+          <label for="pitchFrom">Pitch Measured From</label>
           <select id="pitchFrom" onchange="calculateLineationFromPitch()">
-            <option value="strike">Strike End</option>
-            <option value="opposite">Opposite End</option>
+            <option value="strike">000° (Strike End)</option>
+            <option value="opposite">180° (Opposite End)</option>
           </select>
         </div>
       </div>
+
       <div class="compact-row">
         <div class="form-group">
-          <label>Calculated Trend</label>
-          <input id="linTrend" readonly placeholder="Auto" style="font-weight: bold; color: var(--accent);">
+          <label for="linTrend">Calculated Trend</label>
+          <input id="linTrend" readonly placeholder="Auto" style="font-weight: bold; color: var(--accent); background: #e2eaf2;">
         </div>
         <div class="form-group">
-          <label>Calculated Plunge</label>
-          <input id="linPlunge" readonly placeholder="Auto" style="font-weight: bold; color: var(--accent);">
+          <label for="linPlunge">Calculated Plunge</label>
+          <input id="linPlunge" readonly placeholder="Auto" style="font-weight: bold; color: var(--accent); background: #e2eaf2;">
         </div>
       </div>
     </div>
