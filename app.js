@@ -23,22 +23,23 @@ let currentGeoTiffLayer = null;
 let liveLocationMarker = null;
 let liveAccuracyCircle = null;
 
-// High-Precision GPS Track Recording State: stores [lat, lon, alt, timestamp, accuracy]
+// High-Precision GPS Track Recording State: stores [lat, lon, alt, timestamp]
 let isTracking = false;
 let trackWatchId = null;
 let gpsTrackPoints = JSON.parse(localStorage.getItem('gpsTraverseTrack') || '[]');
 let gpsTrackPolyline = null;
 
-// 50-Second Countdown State
+// 50-Second Countdown Safeguard State
 let deleteCountdownVal = 50;
 let deleteTimerInterval = null;
 let recordsPendingDeletion = [];
 
+// Form Element IDs to track and persist
 const ids = [
   'date', 'locPrefix', 'locNo', 'loc', 'lat', 'lon', 'alt', 'accuracy', 'lith',
   'mineralization', 'alteration', 'unit', 'type', 'customStructure', 'strike', 'dip',
   'dipdir', 'trend', 'plunge', 'sense', 'movementDir', 'photo', 'sampleType',
-  'samplePrefix', 'sample', 'remarks', 'linType', 'linRake', 'pitchFrom', 'linTrend', 'linPlunge'
+  'samplePrefix', 'sample', 'remarks', 'linType', 'customLinType', 'linRake', 'pitchFrom', 'linTrend', 'linPlunge'
 ];
 
 // ==========================================
@@ -118,10 +119,25 @@ function createNewProject() {
 // ==========================================
 // 4. CALCULATION & LIVE PREVIEW UTILITIES
 // ==========================================
+function handleLinTypeChange() {
+  const select = document.getElementById('linType');
+  const customDiv = document.getElementById('customLinTypeDiv');
+  if (!select || !customDiv) return;
+
+  const isOther = (select.value === 'Other');
+  customDiv.classList.toggle('hidden', !isOther);
+
+  if (!isOther) {
+    const customInput = document.getElementById('customLinType');
+    if (customInput) customInput.value = '';
+  }
+}
+
 function toggleLineationSection() {
   const panel = document.getElementById('associatedLineationDiv');
   const btn = document.getElementById('toggleLineationBtn');
   if (!panel || !btn) return;
+
   const isHidden = panel.classList.contains('hidden');
   if (isHidden) {
     panel.classList.remove('hidden');
@@ -131,10 +147,11 @@ function toggleLineationSection() {
   } else {
     panel.classList.add('hidden');
     btn.innerHTML = '➕ Associated Lineation (Pitch / Rake)';
-    ['linType', 'linRake', 'linTrend', 'linPlunge'].forEach(id => {
+    ['linType', 'customLinType', 'linRake', 'linTrend', 'linPlunge'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = '';
     });
+    handleLinTypeChange();
     updatePreview();
   }
 }
@@ -144,21 +161,23 @@ function updatePitchFromOptions() {
   const pitchSelect = document.getElementById('pitchFrom');
   if (!pitchSelect) return;
 
+  const currentSelection = pitchSelect.value || 'strike';
+
   if (!isNaN(strikeVal)) {
     const strikeDeg = pad3(strikeVal);
     const oppDeg = pad3((strikeVal + 180) % 360);
-    const currentVal = pitchSelect.value;
 
     pitchSelect.innerHTML = `
       <option value="strike">${strikeDeg}° (Strike End)</option>
       <option value="opposite">${oppDeg}° (Opposite End)</option>
     `;
-    pitchSelect.value = currentVal || 'strike';
+    pitchSelect.value = currentSelection;
   } else {
     pitchSelect.innerHTML = `
       <option value="strike">000° (Strike End)</option>
       <option value="opposite">180° (Opposite End)</option>
     `;
+    pitchSelect.value = currentSelection;
   }
 }
 
@@ -182,17 +201,25 @@ function calculateLineationFromPitch() {
   const radDip = (dip * Math.PI) / 180;
   const radRake = (rake * Math.PI) / 180;
 
+  // 1. Plunge: sin(plunge) = sin(dip) * sin(rake)
   const sinPlunge = Math.sin(radDip) * Math.sin(radRake);
-  const plungeDeg = Math.round((Math.asin(Math.min(1, Math.max(-1, sinPlunge))) * 180) / Math.PI);
+  const plungeRad = Math.asin(Math.min(1, Math.max(-1, sinPlunge)));
+  const plungeDeg = Math.round((plungeRad * 180) / Math.PI);
 
+  // 2. Apparent horizontal angle along strike: tan(beta) = tan(rake) * cos(dip)
   const betaRad = Math.atan2(Math.tan(radRake) * Math.cos(radDip), 1);
   const betaDeg = (betaRad * 180) / Math.PI;
 
-  let trendDeg = (pitchFrom === 'opposite')
-    ? (strike + 180 - betaDeg + 360) % 360
-    : (strike + betaDeg + 360) % 360;
+  // 3. True Trend calculated relative to selected strike end
+  let trendDeg;
+  if (pitchFrom === 'opposite') {
+    trendDeg = (strike + 180 - betaDeg + 360) % 360;
+  } else {
+    trendDeg = (strike + betaDeg + 360) % 360;
+  }
 
   trendDeg = Math.round(trendDeg);
+
   trendInput.value = pad3(trendDeg) + '°';
   plungeInput.value = String(plungeDeg).padStart(2, '0') + '°';
   updatePreview();
@@ -217,8 +244,15 @@ function fmt() {
   }
 
   let s = `${t}: ${dataStr}`;
-  if (val('linType') && val('linTrend') && val('linPlunge')) {
-    s += ` | ${val('linType')}: ${val('linPlunge')} → ${val('linTrend')} (Pitch ${val('linRake')}°)`;
+
+  let linTypeName = val('linType');
+  if (linTypeName === 'Other' && val('customLinType')) {
+    linTypeName = val('customLinType');
+  }
+
+  if (linTypeName && val('linTrend') && val('linPlunge')) {
+    const fromLabel = val('pitchFrom') === 'opposite' ? 'Opposite' : 'Strike';
+    s += ` | ${linTypeName}: ${val('linPlunge')} → ${val('linTrend')} (Pitch ${val('linRake')}° from ${fromLabel})`;
   }
   if (se) s += `, ${se} sense`;
   if (md) s += ` (${md})`;
@@ -231,7 +265,7 @@ function updatePreview() {
 }
 
 // ==========================================
-// 5. GPS POSITIONING ENGINE (STRICT SATELLITE FIX)
+// 5. GPS POSITIONING ENGINE
 // ==========================================
 function getGPS() {
   const latField = document.getElementById('lat');
@@ -290,8 +324,8 @@ function getGPS() {
     if (accField) accField.value = 'Error';
 
     let msg = '';
-    if (err.code === 1) msg = "Permission Denied: Tap the padlock/tune icon near URL and enable 'Precise Location'.";
-    else if (err.code === 2) msg = "Position Unavailable: GPS satellites not locked. Step out under open sky.";
+    if (err.code === 1) msg = "Permission Denied: Tap the site info padlock and enable 'Precise Location'.";
+    else if (err.code === 2) msg = "Position Unavailable: GPS satellites not locked.";
     else if (err.code === 3) msg = "GPS Timeout: Tap 'Sync GPS' again.";
     else msg = err.message || "Unknown GPS error.";
 
@@ -336,7 +370,6 @@ function saveEntry() {
   render();
   alert('Station record saved successfully!');
 
-  // Immediately refresh GPS for the next station to keep hardware warm
   if (typeof getGPS === 'function') getGPS();
 }
 
@@ -391,6 +424,8 @@ function clearForm(resetDate = true) {
     }
   });
 
+  handleLinTypeChange();
+
   const takeSampleEl = document.getElementById('takeSample');
   if (takeSampleEl) {
     takeSampleEl.checked = false;
@@ -441,7 +476,7 @@ function toggleRecordSelection(id, isSelected) {
 }
 
 // ==========================================
-// 8. 50-SECOND TIMER SAFE DELETION
+// 8. 50-SECOND TIMER SAFEGUARD
 // ==========================================
 function initiateDeleteSelected() {
   recordsPendingDeletion = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId && r.selectedForDelete);
@@ -501,14 +536,14 @@ function abortDeletion() {
 }
 
 // ==========================================
-// 9. DYNAMIC SVG SYMBOLS FOR LEAFLET (-90° RHR FIXED)
+// 9. DYNAMIC SVG SYMBOLS (-90° RHR FIXED)
 // ==========================================
 function getPlanarSvgIcon(strike, dip, type) {
   const strikeDeg = parseFloat(strike) || 0;
   const dipVal = (dip !== undefined && dip !== '') ? dip : '';
   const structColor = getStructureColor(type);
 
-  // Offset by -90° to align the horizontal SVG base with True North (000°)
+  // Offset by -90° to align the horizontal SVG base with true North (000°)
   const planarRotation = (strikeDeg - 90 + 360) % 360;
 
   const svg = `
@@ -576,6 +611,7 @@ function openSpatialMap() {
   setTimeout(() => {
     const formLat = parseFloat(val('lat'));
     const formLon = parseFloat(val('lon'));
+    const formAcc = parseFloat(val('accuracy')) || 10;
     const hasFormCoords = !isNaN(formLat) && !isNaN(formLon);
 
     const validPoints = records.filter(r => r.lat && r.lon && !isNaN(parseFloat(r.lat)) && !isNaN(parseFloat(r.lon)));
@@ -595,7 +631,6 @@ function openSpatialMap() {
       gpsTrackPolyline = L.polyline([], { color: '#0984e3', weight: 4 }).addTo(mapInstance);
       renderStoredGpsTrack();
 
-      // Live reticle HUD updates on move and zoom
       mapInstance.on('move', updateCenterReticleCoords);
       mapInstance.on('zoom', updateCenterReticleCoords);
 
@@ -606,9 +641,9 @@ function openSpatialMap() {
       });
 
       mapInstance.on('locationerror', function (e) {
-        console.warn('Map live location error: ' + e.message);
+        console.warn('Map location error: ' + e.message);
         if (hasFormCoords) {
-          renderBlueDotAt(formLat, formLon, parseFloat(val('accuracy')) || 10);
+          renderBlueDotAt(formLat, formLon, formAcc);
         }
       });
     } else {
@@ -616,13 +651,13 @@ function openSpatialMap() {
     }
 
     updateMapDisplay();
-    updateCenterReticleCoords();
 
     if (hasFormCoords) {
-      const formAcc = parseFloat(val('accuracy')) || 10;
       renderBlueDotAt(formLat, formLon, formAcc);
       mapInstance.setView([formLat, formLon], Math.max(mapInstance.getZoom(), 16));
     }
+
+    updateCenterReticleCoords();
 
     mapInstance.locate({
       setView: !hasFormCoords,
@@ -699,7 +734,7 @@ function renderBlueDotAt(lat, lon, accuracy) {
 
   liveLocationMarker.bindPopup(`
     <div style="font-family: system-ui, sans-serif; font-size: 12px; line-height: 1.4;">
-      <b style="color: #007aff;">📍 You are here</b><br>
+      <b style="color: #007aff;">📍 Current Position</b><br>
       Lat: ${lat.toFixed(6)}<br>
       Lon: ${lon.toFixed(6)}<br>
       Accuracy: ±${Math.round(radius)}m
@@ -802,7 +837,7 @@ function saveStationEdit() {
 }
 
 // ==========================================
-// 11. HIGH-PRECISION GPS TRAVERSE ENGINE & EXPORTS
+// 11. GPS TRAVERSE RECORDING & PATH EXPORTS
 // ==========================================
 function toggleGpsTracking() {
   const btn = document.getElementById('startTrackBtn');
@@ -819,7 +854,7 @@ function toggleGpsTracking() {
 
     trackWatchId = navigator.geolocation.watchPosition(
       pos => {
-        // Enforce sub-25m satellite accuracy threshold to prevent jump spikes
+        // Enforce sub-25m satellite accuracy threshold
         if (pos.coords.accuracy > 25) return;
 
         const newPt = [
@@ -829,7 +864,7 @@ function toggleGpsTracking() {
           new Date().toISOString()
         ];
 
-        // 5-meter movement filter to prevent bloat when resting at outcrop
+        // 5-meter movement filter
         if (gpsTrackPoints.length > 0) {
           const last = gpsTrackPoints[gpsTrackPoints.length - 1];
           const dist = L.latLng(last[0], last[1]).distanceTo(L.latLng(newPt[0], newPt[1]));
@@ -947,7 +982,7 @@ function loadGeoTIFFOverlay() {
   reader.onload = function(e) {
     const arrayBuffer = e.target.result;
     if (typeof parseGeoraster === 'undefined') {
-      alert("GeoTIFF library not ready. Check internet connection for CDN assets.");
+      alert("GeoTIFF engine not ready. Ensure CDN scripts are loaded in index.html.");
       return;
     }
 
@@ -1074,20 +1109,15 @@ function removeCustomMapOverlay() {
 // ==========================================
 // 13. DATA EXPORTS & DATABASE SYNC (CLEAN CSV)
 // ==========================================
-function cleanNumeric(val) {
-  if (val === null || val === undefined) return '';
-  // Strips degree signs (°), Â artifacts, compass letters, or unit tags
-  const cleaned = String(val).replace(/[^\d.-]/g, '').trim();
+function cleanNumeric(v) {
+  if (v === null || v === undefined) return '';
+  const cleaned = String(v).replace(/[^\d.-]/g, '').trim();
   return isNaN(parseFloat(cleaned)) ? '' : cleaned;
 }
 
-function cleanText(val) {
-  if (val === null || val === undefined) return '';
-  // Removes raw degree characters and encoding glitches from text fields
-  return String(val)
-    .replace(/[°Â]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+function cleanText(v) {
+  if (v === null || v === undefined) return '';
+  return String(v).replace(/[°Â]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function exportCSV() {
@@ -1097,7 +1127,6 @@ function exportCSV() {
     return;
   }
 
-  // Geological field schema with dedicated numeric columns
   const headers = [
     'Project_ID',
     'Station_ID',
@@ -1112,8 +1141,11 @@ function exportCSV() {
     'Dip_Direction',
     'Trend',
     'Plunge',
-    'Pitch_Rake',
     'Associated_Lineation_Type',
+    'Pitch_Rake',
+    'Pitch_Measured_From',
+    'Associated_Trend',
+    'Associated_Plunge',
     'Sense_of_Movement',
     'Lithology',
     'Stratigraphic_Unit',
@@ -1126,9 +1158,15 @@ function exportCSV() {
   ];
 
   const rows = projectRecords.map(r => {
-    // Determine dip direction mathematically (Strike + 90) under RHR
     const strikeNum = parseFloat(cleanNumeric(r.strike));
     const dipDirNum = !isNaN(strikeNum) ? (Math.round(strikeNum + 90) % 360) : '';
+
+    let resolvedLinType = r.linType || '';
+    if (resolvedLinType === 'Other' && r.customLinType) {
+      resolvedLinType = r.customLinType;
+    }
+
+    const resolvedStructureType = (r.type === 'Other' && r.customStructure) ? r.customStructure : (r.type || '');
 
     return [
       `"${cleanText(r.projectId || activeProjectId)}"`,
@@ -1138,14 +1176,17 @@ function exportCSV() {
       cleanNumeric(r.lon),
       cleanNumeric(r.alt),
       cleanNumeric(r.accuracy),
-      `"${cleanText(r.type)}"`,
+      `"${cleanText(resolvedStructureType)}"`,
       cleanNumeric(r.strike),
       cleanNumeric(r.dip),
       dipDirNum !== '' ? dipDirNum : '',
-      cleanNumeric(r.trend || r.linTrend),
-      cleanNumeric(r.plunge || r.linPlunge),
+      cleanNumeric(r.trend),
+      cleanNumeric(r.plunge),
+      `"${cleanText(resolvedLinType)}"`,
       cleanNumeric(r.linRake),
-      `"${cleanText(r.linType)}"`,
+      `"${cleanText(r.pitchFrom || '')}"`,
+      cleanNumeric(r.linTrend),
+      cleanNumeric(r.linPlunge),
       `"${cleanText(r.sense)}"`,
       `"${cleanText(r.lith)}"`,
       `"${cleanText(r.unit)}"`,
@@ -1158,7 +1199,6 @@ function exportCSV() {
     ].join(',');
   });
 
-  // Prepend UTF-8 BOM (\uFEFF) so Excel parses text correctly without Â° glitches
   const csvContent = '\uFEFF' + [headers.join(',')].concat(rows).join('\r\n');
   const fileName = `${activeProjectId}_Stations_${new Date().toISOString().slice(0, 10)}.csv`;
 
@@ -1198,13 +1238,21 @@ async function shareTraverseFile() {
   const headers = [
     'Project_ID', 'Station_ID', 'Date', 'Latitude', 'Longitude', 'Altitude_m',
     'GPS_Accuracy_m', 'Structure_Type', 'Strike', 'Dip', 'Dip_Direction',
-    'Trend', 'Plunge', 'Pitch_Rake', 'Lithology', 'Stratigraphic_Unit',
+    'Trend', 'Plunge', 'Associated_Lineation_Type', 'Pitch_Rake', 'Pitch_Measured_From',
+    'Associated_Trend', 'Associated_Plunge', 'Lithology', 'Stratigraphic_Unit',
     'Sample_ID', 'Sample_Type', 'Photo_References', 'Remarks'
   ];
 
   const rows = projectRecords.map(r => {
     const strikeNum = parseFloat(cleanNumeric(r.strike));
     const dipDirNum = !isNaN(strikeNum) ? (Math.round(strikeNum + 90) % 360) : '';
+
+    let resolvedLinType = r.linType || '';
+    if (resolvedLinType === 'Other' && r.customLinType) {
+      resolvedLinType = r.customLinType;
+    }
+
+    const resolvedStructureType = (r.type === 'Other' && r.customStructure) ? r.customStructure : (r.type || '');
 
     return [
       `"${cleanText(r.projectId || activeProjectId)}"`,
@@ -1214,13 +1262,17 @@ async function shareTraverseFile() {
       cleanNumeric(r.lon),
       cleanNumeric(r.alt),
       cleanNumeric(r.accuracy),
-      `"${cleanText(r.type)}"`,
+      `"${cleanText(resolvedStructureType)}"`,
       cleanNumeric(r.strike),
       cleanNumeric(r.dip),
       dipDirNum !== '' ? dipDirNum : '',
-      cleanNumeric(r.trend || r.linTrend),
-      cleanNumeric(r.plunge || r.linPlunge),
+      cleanNumeric(r.trend),
+      cleanNumeric(r.plunge),
+      `"${cleanText(resolvedLinType)}"`,
       cleanNumeric(r.linRake),
+      `"${cleanText(r.pitchFrom || '')}"`,
+      cleanNumeric(r.linTrend),
+      cleanNumeric(r.linPlunge),
       `"${cleanText(r.lith)}"`,
       `"${cleanText(r.unit)}"`,
       `"${cleanText(r.sample)}"`,
@@ -1359,7 +1411,7 @@ function startVoiceNote() {
 }
 
 // ==========================================
-// 14. DOM BINDINGS & SW INIT
+// 14. DOM BINDINGS & LIFECYCLE INITIALIZATION
 // ==========================================
 document.addEventListener('DOMContentLoaded', () => {
   const dateEl = document.getElementById('date');
@@ -1381,6 +1433,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Strike listener updates DD, regenerates end labels, and recalculates pitch
   const strikeEl = document.getElementById('strike');
   if (strikeEl) {
     strikeEl.addEventListener('input', function () {
@@ -1395,8 +1448,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Dip listener recalculates pitch
   const dipEl = document.getElementById('dip');
   if (dipEl) dipEl.addEventListener('input', calculateLineationFromPitch);
+
+  // Pitch/Rake listener
+  const linRakeEl = document.getElementById('linRake');
+  if (linRakeEl) linRakeEl.addEventListener('input', calculateLineationFromPitch);
+
+  // Reference End dropdown listener
+  const pitchFromEl = document.getElementById('pitchFrom');
+  if (pitchFromEl) pitchFromEl.addEventListener('change', calculateLineationFromPitch);
+
+  // Associated Lineation Type dropdown listener
+  const linTypeEl = document.getElementById('linType');
+  if (linTypeEl) {
+    linTypeEl.addEventListener('change', function () {
+      handleLinTypeChange();
+      updatePreview();
+    });
+  }
 
   renderProjectDropdown();
   updateLocationID();
@@ -1404,19 +1475,20 @@ document.addEventListener('DOMContentLoaded', () => {
   render();
   updatePreview();
 
-  // AUTOMATIC GPS PRE-WARMING ON LOAD / REFRESH
+  // Automatic GPS Pre-warming loop
   if (typeof getGPS === 'function') {
     setTimeout(getGPS, 600);
   }
 });
 
-// Window resize handler for Leaflet tiles
+// Window resize handler for Leaflet canvas
 window.addEventListener('resize', () => {
   if (mapInstance) {
     mapInstance.invalidateSize();
   }
 });
 
+// Service Worker Registration for PWA Offline Functionality
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
@@ -1425,13 +1497,13 @@ if ('serviceWorker' in navigator) {
           const installingWorker = reg.installing;
           installingWorker.onstatechange = () => {
             if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              if (confirm('Version 2.0 available! Reload to apply updates?')) {
+              if (confirm('New version available! Reload to apply updates?')) {
                 window.location.reload();
               }
             }
           };
         };
       })
-      .catch(err => console.error('SW Error:', err));
+      .catch(err => console.error('SW Registration Error:', err));
   });
 }
