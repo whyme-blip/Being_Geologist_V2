@@ -14,16 +14,16 @@ let mapInstance = null;
 let mapDataGroup = null;
 let liveGpsLayerGroup = null;
 let osmTileLayer = null;
-let layerControl = null;
 let kmlMapOverlayLayer = null;
 let customOverlayLayer = null;
 let currentOverlayUrl = null;
+let currentGeoTiffLayer = null;
 
 // Live GPS Blue Dot Handles
 let liveLocationMarker = null;
 let liveAccuracyCircle = null;
 
-// GPS Track Recording State
+// High-Precision GPS Track Recording State: stores [lat, lon, alt, timestamp, accuracy]
 let isTracking = false;
 let trackWatchId = null;
 let gpsTrackPoints = JSON.parse(localStorage.getItem('gpsTraverseTrack') || '[]');
@@ -501,14 +501,14 @@ function abortDeletion() {
 }
 
 // ==========================================
-// 9. DYNAMIC SVG SYMBOLS FOR LEAFLET
+// 9. DYNAMIC SVG SYMBOLS FOR LEAFLET (-90° RHR FIXED)
 // ==========================================
 function getPlanarSvgIcon(strike, dip, type) {
   const strikeDeg = parseFloat(strike) || 0;
   const dipVal = (dip !== undefined && dip !== '') ? dip : '';
   const structColor = getStructureColor(type);
 
-  // Apply -90° offset: horizontal line (East-West at 0°) aligns to True North (000°)
+  // Offset by -90° to align the horizontal SVG base with True North (000°)
   const planarRotation = (strikeDeg - 90 + 360) % 360;
 
   const svg = `
@@ -536,7 +536,6 @@ function getLinearSvgIcon(trend, plunge, type) {
   const plungeVal = (plunge !== undefined && plunge !== '') ? plunge : '';
   const strokeColor = getStructureColor(type || 'Lineation');
 
-  // Linear arrow drawn vertically pointing North (y: 32 -> 8); standard rotate(${trendDeg}) points to azimuth
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
       <g transform="rotate(${trendDeg}, 20, 20)">
@@ -568,7 +567,7 @@ function getStructureColor(type) {
 }
 
 // ==========================================
-// 10. POPUP MAP & IN-MAP STATION EDITING
+// 10. POPUP MAP, CENTER RETICLE & LIVE BLUE DOT
 // ==========================================
 function openSpatialMap() {
   const modal = document.getElementById('mapModal');
@@ -596,9 +595,14 @@ function openSpatialMap() {
       gpsTrackPolyline = L.polyline([], { color: '#0984e3', weight: 4 }).addTo(mapInstance);
       renderStoredGpsTrack();
 
+      // Live reticle HUD updates on move and zoom
+      mapInstance.on('move', updateCenterReticleCoords);
+      mapInstance.on('zoom', updateCenterReticleCoords);
+
       mapInstance.on('locationfound', function (e) {
         renderBlueDotAt(e.latlng.lat, e.latlng.lng, e.accuracy);
         mapInstance.setView(e.latlng, Math.max(mapInstance.getZoom(), 16));
+        updateCenterReticleCoords();
       });
 
       mapInstance.on('locationerror', function (e) {
@@ -612,6 +616,7 @@ function openSpatialMap() {
     }
 
     updateMapDisplay();
+    updateCenterReticleCoords();
 
     if (hasFormCoords) {
       const formAcc = parseFloat(val('accuracy')) || 10;
@@ -627,6 +632,35 @@ function openSpatialMap() {
     });
 
   }, 200);
+}
+
+function updateCenterReticleCoords() {
+  if (!mapInstance) return;
+  const center = mapInstance.getCenter();
+  const hud = document.getElementById('reticleCoords');
+  if (hud) {
+    hud.textContent = `Lat: ${center.lat.toFixed(6)} | Lon: ${center.lng.toFixed(6)}`;
+  }
+}
+
+function pinCoordinatesFromCenter() {
+  if (!mapInstance) return;
+  const center = mapInstance.getCenter();
+
+  const latField = document.getElementById('lat');
+  const lonField = document.getElementById('lon');
+  const accField = document.getElementById('accuracy');
+
+  if (latField) latField.value = center.lat.toFixed(6);
+  if (lonField) lonField.value = center.lng.toFixed(6);
+  if (accField) accField.value = 'Map Reticle';
+
+  updatePreview();
+  closeSpatialMap();
+  const strikeEl = document.getElementById('strike');
+  if (strikeEl) strikeEl.focus();
+
+  alert(`Pinned Reticle Coordinates:\nLat: ${center.lat.toFixed(6)}\nLon: ${center.lng.toFixed(6)}`);
 }
 
 function renderBlueDotAt(lat, lon, accuracy) {
@@ -768,7 +802,7 @@ function saveStationEdit() {
 }
 
 // ==========================================
-// 11. GPS TRAVERSE RECORDER
+// 11. HIGH-PRECISION GPS TRAVERSE ENGINE & EXPORTS
 // ==========================================
 function toggleGpsTracking() {
   const btn = document.getElementById('startTrackBtn');
@@ -785,13 +819,29 @@ function toggleGpsTracking() {
 
     trackWatchId = navigator.geolocation.watchPosition(
       pos => {
-        const point = [pos.coords.latitude, pos.coords.longitude];
-        gpsTrackPoints.push(point);
+        // Enforce sub-25m satellite accuracy threshold to prevent jump spikes
+        if (pos.coords.accuracy > 25) return;
+
+        const newPt = [
+          parseFloat(pos.coords.latitude.toFixed(6)),
+          parseFloat(pos.coords.longitude.toFixed(6)),
+          pos.coords.altitude !== null ? parseFloat(pos.coords.altitude.toFixed(1)) : 0,
+          new Date().toISOString()
+        ];
+
+        // 5-meter movement filter to prevent bloat when resting at outcrop
+        if (gpsTrackPoints.length > 0) {
+          const last = gpsTrackPoints[gpsTrackPoints.length - 1];
+          const dist = L.latLng(last[0], last[1]).distanceTo(L.latLng(newPt[0], newPt[1]));
+          if (dist < 4.0) return;
+        }
+
+        gpsTrackPoints.push(newPt);
         localStorage.setItem('gpsTraverseTrack', JSON.stringify(gpsTrackPoints));
         renderStoredGpsTrack();
       },
       err => console.warn('Track Error: ' + err.message),
-      { enableHighAccuracy: true, maximumAge: 1000 }
+      { enableHighAccuracy: true, maximumAge: 0 }
     );
   } else {
     isTracking = false;
@@ -805,11 +855,12 @@ function toggleGpsTracking() {
 
 function renderStoredGpsTrack() {
   if (!gpsTrackPolyline) return;
-  gpsTrackPolyline.setLatLngs(gpsTrackPoints);
-  
+  const latLngs = gpsTrackPoints.map(p => [p[0], p[1]]);
+  gpsTrackPolyline.setLatLngs(latLngs);
+
   let totalMeters = 0;
-  for (let i = 1; i < gpsTrackPoints.length; i++) {
-    totalMeters += L.latLng(gpsTrackPoints[i - 1]).distanceTo(L.latLng(gpsTrackPoints[i]));
+  for (let i = 1; i < latLngs.length; i++) {
+    totalMeters += L.latLng(latLngs[i - 1]).distanceTo(L.latLng(latLngs[i]));
   }
   const distEl = document.getElementById('trackDistance');
   if (distEl) distEl.textContent = `Dist: ${(totalMeters / 1000).toFixed(2)} km`;
@@ -823,9 +874,112 @@ function clearGpsTrack() {
   }
 }
 
+function exportTrackGPX() {
+  if (gpsTrackPoints.length === 0) { alert("No track points recorded."); return; }
+  let gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GeoLogger v2.0" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Traverse_${activeProjectId}_${new Date().toISOString().slice(0,10)}</name>
+    <trkseg>`;
+  gpsTrackPoints.forEach(p => {
+    gpx += `\n      <trkpt lat="${p[0]}" lon="${p[1]}"><ele>${p[2]}</ele><time>${p[3]}</time></trkpt>`;
+  });
+  gpx += `\n    </trkseg>\n  </trk>\n</gpx>`;
+  download(`Traverse_Track_${activeProjectId}.gpx`, gpx, 'application/gpx+xml');
+}
+
+function exportTrackKML() {
+  if (gpsTrackPoints.length === 0) { alert("No track points recorded."); return; }
+  const coordsStr = gpsTrackPoints.map(p => `${p[1]},${p[0]},${p[2]}`).join(' ');
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Traverse Track ${activeProjectId}</name>
+    <Placemark>
+      <name>Traverse Path</name>
+      <LineString>
+        <altitudeMode>clampToGround</altitudeMode>
+        <coordinates>${coordsStr}</coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+  download(`Traverse_Track_${activeProjectId}.kml`, kml, 'application/vnd.google-earth.kml+xml');
+}
+
+function exportTrackGeoJSON() {
+  if (gpsTrackPoints.length === 0) { alert("No track points recorded."); return; }
+  const geojson = {
+    type: "FeatureCollection",
+    features: [{
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: gpsTrackPoints.map(p => [p[1], p[0], p[2]])
+      },
+      properties: {
+        projectId: activeProjectId,
+        pointCount: gpsTrackPoints.length,
+        recordedAt: new Date().toISOString()
+      }
+    }]
+  };
+  download(`Traverse_Track_${activeProjectId}.geojson`, JSON.stringify(geojson, null, 2), 'application/geo+json');
+}
+
 // ==========================================
-// 12. OVERLAYS (KML & SCANNED MAPS)
+// 12. OFFLINE MAP OVERLAYS (GEOTIFF / KML / IMAGE)
 // ==========================================
+function loadGeoTIFFOverlay() {
+  const fileInput = document.getElementById('geotiffFileInput');
+  const file = fileInput ? fileInput.files[0] : null;
+
+  if (!file) {
+    alert("Please select a GeoTIFF (.tif/.tiff) file first.");
+    return;
+  }
+  if (!mapInstance) {
+    alert("Please open the field map first.");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const arrayBuffer = e.target.result;
+    if (typeof parseGeoraster === 'undefined') {
+      alert("GeoTIFF library not ready. Check internet connection for CDN assets.");
+      return;
+    }
+
+    parseGeoraster(arrayBuffer).then(georaster => {
+      removeGeoTIFFOverlay(false);
+
+      currentGeoTiffLayer = new GeoRasterLayer({
+        georaster: georaster,
+        opacity: 0.85,
+        resolution: 256
+      });
+
+      currentGeoTiffLayer.addTo(mapInstance);
+      mapInstance.fitBounds(currentGeoTiffLayer.getBounds());
+      alert("GeoTIFF map sheet rendered successfully!");
+    }).catch(err => {
+      alert("Error parsing GeoTIFF: " + err.message);
+    });
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function removeGeoTIFFOverlay(showAlert = true) {
+  if (currentGeoTiffLayer && mapInstance) {
+    mapInstance.removeLayer(currentGeoTiffLayer);
+    currentGeoTiffLayer = null;
+    const fileInput = document.getElementById('geotiffFileInput');
+    if (fileInput) fileInput.value = '';
+    if (showAlert) alert("GeoTIFF map sheet removed.");
+  }
+}
+
 function kmlToGeoJson(xmlDoc) {
   const features = [];
   const placemarks = xmlDoc.getElementsByTagName("Placemark");
@@ -918,12 +1072,12 @@ function removeCustomMapOverlay() {
 }
 
 // ==========================================
-// 13. DATA EXPORTS & BACKUPS (WhatsApp / DB)
+// 13. DATA EXPORTS & DATABASE SYNC
 // ==========================================
 function exportCSV() {
   const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
   if (projectRecords.length === 0) { alert('No data to export.'); return; }
-  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks'];
+  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks', 'photo'];
   const csv = [cols.join(',')].concat(projectRecords.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','))).join('\n');
   download(`structural_data_${activeProjectId}.csv`, csv, 'text/csv');
 }
@@ -955,7 +1109,7 @@ async function shareTraverseFile() {
   const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
   if (projectRecords.length === 0) { alert("No records available to share."); return; }
 
-  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks'];
+  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks', 'photo'];
   const csvContent = [cols.join(',')].concat(
     projectRecords.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','))
   ).join('\n');
