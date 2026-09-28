@@ -1072,14 +1072,97 @@ function removeCustomMapOverlay() {
 }
 
 // ==========================================
-// 13. DATA EXPORTS & DATABASE SYNC
+// 13. DATA EXPORTS & DATABASE SYNC (CLEAN CSV)
 // ==========================================
+function cleanNumeric(val) {
+  if (val === null || val === undefined) return '';
+  // Strips degree signs (°), Â artifacts, compass letters, or unit tags
+  const cleaned = String(val).replace(/[^\d.-]/g, '').trim();
+  return isNaN(parseFloat(cleaned)) ? '' : cleaned;
+}
+
+function cleanText(val) {
+  if (val === null || val === undefined) return '';
+  // Removes raw degree characters and encoding glitches from text fields
+  return String(val)
+    .replace(/[°Â]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function exportCSV() {
   const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
-  if (projectRecords.length === 0) { alert('No data to export.'); return; }
-  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks', 'photo'];
-  const csv = [cols.join(',')].concat(projectRecords.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','))).join('\n');
-  download(`structural_data_${activeProjectId}.csv`, csv, 'text/csv');
+  if (projectRecords.length === 0) {
+    alert(`No station data found for active project: ${activeProjectId}`);
+    return;
+  }
+
+  // Geological field schema with dedicated numeric columns
+  const headers = [
+    'Project_ID',
+    'Station_ID',
+    'Date',
+    'Latitude',
+    'Longitude',
+    'Altitude_m',
+    'GPS_Accuracy_m',
+    'Structure_Type',
+    'Strike',
+    'Dip',
+    'Dip_Direction',
+    'Trend',
+    'Plunge',
+    'Pitch_Rake',
+    'Associated_Lineation_Type',
+    'Sense_of_Movement',
+    'Lithology',
+    'Stratigraphic_Unit',
+    'Mineralization',
+    'Alteration',
+    'Sample_ID',
+    'Sample_Type',
+    'Photo_References',
+    'Remarks'
+  ];
+
+  const rows = projectRecords.map(r => {
+    // Determine dip direction mathematically (Strike + 90) under RHR
+    const strikeNum = parseFloat(cleanNumeric(r.strike));
+    const dipDirNum = !isNaN(strikeNum) ? (Math.round(strikeNum + 90) % 360) : '';
+
+    return [
+      `"${cleanText(r.projectId || activeProjectId)}"`,
+      `"${cleanText(r.locNo)}"`,
+      `"${cleanText(r.date)}"`,
+      cleanNumeric(r.lat),
+      cleanNumeric(r.lon),
+      cleanNumeric(r.alt),
+      cleanNumeric(r.accuracy),
+      `"${cleanText(r.type)}"`,
+      cleanNumeric(r.strike),
+      cleanNumeric(r.dip),
+      dipDirNum !== '' ? dipDirNum : '',
+      cleanNumeric(r.trend || r.linTrend),
+      cleanNumeric(r.plunge || r.linPlunge),
+      cleanNumeric(r.linRake),
+      `"${cleanText(r.linType)}"`,
+      `"${cleanText(r.sense)}"`,
+      `"${cleanText(r.lith)}"`,
+      `"${cleanText(r.unit)}"`,
+      `"${cleanText(r.mineralization)}"`,
+      `"${cleanText(r.alteration)}"`,
+      `"${cleanText(r.sample)}"`,
+      `"${cleanText(r.sampleType)}"`,
+      `"${cleanText(r.photo)}"`,
+      `"${cleanText(r.remarks).replace(/"/g, '""')}"`
+    ].join(',');
+  });
+
+  // Prepend UTF-8 BOM (\uFEFF) so Excel parses text correctly without Â° glitches
+  const csvContent = '\uFEFF' + [headers.join(',')].concat(rows).join('\r\n');
+  const fileName = `${activeProjectId}_Stations_${new Date().toISOString().slice(0, 10)}.csv`;
+
+  download(fileName, csvContent, 'text/csv;charset=utf-8;');
 }
 
 function exportGeoJSON() {
@@ -1107,29 +1190,62 @@ function exportKML() {
 
 async function shareTraverseFile() {
   const projectRecords = records.filter(r => (r.projectId || 'PROJ-001') === activeProjectId);
-  if (projectRecords.length === 0) { alert("No records available to share."); return; }
+  if (projectRecords.length === 0) {
+    alert("No records available to share for active project.");
+    return;
+  }
 
-  const cols = ['projectId', 'date', 'locNo', 'lat', 'lon', 'alt', 'unit', 'lith', 'type', 'strike', 'dip', 'trend', 'plunge', 'sample', 'remarks', 'photo'];
-  const csvContent = [cols.join(',')].concat(
-    projectRecords.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','))
-  ).join('\n');
+  const headers = [
+    'Project_ID', 'Station_ID', 'Date', 'Latitude', 'Longitude', 'Altitude_m',
+    'GPS_Accuracy_m', 'Structure_Type', 'Strike', 'Dip', 'Dip_Direction',
+    'Trend', 'Plunge', 'Pitch_Rake', 'Lithology', 'Stratigraphic_Unit',
+    'Sample_ID', 'Sample_Type', 'Photo_References', 'Remarks'
+  ];
 
-  const fileName = `Traverse_${activeProjectId}_${new Date().toISOString().slice(0,10)}.csv`;
-  const file = new File([csvContent], fileName, { type: 'text/csv' });
+  const rows = projectRecords.map(r => {
+    const strikeNum = parseFloat(cleanNumeric(r.strike));
+    const dipDirNum = !isNaN(strikeNum) ? (Math.round(strikeNum + 90) % 360) : '';
+
+    return [
+      `"${cleanText(r.projectId || activeProjectId)}"`,
+      `"${cleanText(r.locNo)}"`,
+      `"${cleanText(r.date)}"`,
+      cleanNumeric(r.lat),
+      cleanNumeric(r.lon),
+      cleanNumeric(r.alt),
+      cleanNumeric(r.accuracy),
+      `"${cleanText(r.type)}"`,
+      cleanNumeric(r.strike),
+      cleanNumeric(r.dip),
+      dipDirNum !== '' ? dipDirNum : '',
+      cleanNumeric(r.trend || r.linTrend),
+      cleanNumeric(r.plunge || r.linPlunge),
+      cleanNumeric(r.linRake),
+      `"${cleanText(r.lith)}"`,
+      `"${cleanText(r.unit)}"`,
+      `"${cleanText(r.sample)}"`,
+      `"${cleanText(r.sampleType)}"`,
+      `"${cleanText(r.photo)}"`,
+      `"${cleanText(r.remarks).replace(/"/g, '""')}"`
+    ].join(',');
+  });
+
+  const csvContent = '\uFEFF' + [headers.join(',')].concat(rows).join('\r\n');
+  const fileName = `${activeProjectId}_Stations_${new Date().toISOString().slice(0, 10)}.csv`;
+  const file = new File([csvContent], fileName, { type: 'text/csv;charset=utf-8;' });
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({
         files: [file],
         title: `Field Data: ${activeProjectId}`,
-        text: `Traverse backup for project ${activeProjectId}`
+        text: `Clean station CSV export for ${activeProjectId}`
       });
     } catch (err) {
       if (err.name !== 'AbortError') console.error('Share error:', err);
     }
   } else {
-    download(fileName, csvContent, 'text/csv');
-    alert("Native sharing unavailable. File saved to Downloads.");
+    download(fileName, csvContent, 'text/csv;charset=utf-8;');
   }
 }
 
