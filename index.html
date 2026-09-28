@@ -17,6 +17,11 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <!-- GeoTIFF & Proj4 Engine for Offline Map Sheets -->
+  <script src="https://unpkg.com/proj4"></script>
+  <script src="https://unpkg.com/georaster"></script>
+  <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
+  
   <style>
     :root {
       --primary: #1f3a5f;
@@ -256,6 +261,34 @@
       box-shadow: 0 10px 30px rgba(0,0,0,0.3);
     }
 
+    /* Floating Coordinate Badge over Map */
+    .reticle-hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(31, 58, 95, 0.94);
+      color: #ffffff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      margin-top: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      font-weight: bold;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      z-index: 1000;
+    }
+
+    /* Stationary Optical Center Crosshair */
+    .center-crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 500;
+      pointer-events: none;
+      filter: drop-shadow(0px 0px 2px rgba(255, 255, 255, 0.95));
+    }
+    
     /* Live GPS Blue Dot Leaflet Override */
     .leaflet-div-icon.live-gps-dot {
       background: transparent !important;
@@ -659,34 +692,86 @@
       <button type="button" onclick="closeSpatialMap()" class="btn-danger btn-small">✕ Close</button>
     </div>
 
-    <!-- Live GPS Tracking Console -->
-    <div style="display: flex; gap: 8px; align-items: center; background: #ebf5fb; padding: 6px 10px; border-radius: 6px; margin-top: 8px; flex-wrap: wrap;">
-      <span style="font-weight: bold; font-size: 12px; color: #2980b9;">🛰️ GPS Track:</span>
-      <button type="button" id="startTrackBtn" onclick="toggleGpsTracking()" class="btn-ok btn-small">▶ Start Track</button>
-      <button type="button" id="clearTrackBtn" onclick="clearGpsTrack()" class="btn-sec btn-small">Clear Track</button>
-      <span id="trackDistance" style="font-size: 12px; font-weight: bold; color: #2c3e50; margin-left: 6px;">Dist: 0.00 km</span>
+    <!-- Stationary Reticle Coordinate Readout HUD -->
+    <div id="reticleHud" class="reticle-hud">
+      <div id="reticleCoords">Lat: 0.000000 | Lon: 0.000000</div>
+      <button type="button" onclick="pinCoordinatesFromCenter()" class="btn-ok btn-small" style="padding: 3px 8px; font-size: 11px; margin: 0; width: auto;">
+        📌 Pin to Form
+      </button>
     </div>
 
-    <!-- Raster Map & Vector KML Overlays -->
+    <!-- Map & Stationary Reticle Wrapper -->
+    <div style="position: relative; width: 100%; flex-grow: 1; margin-top: 6px;">
+      <!-- Optical Center Crosshair -->
+      <div id="centerCrosshair" class="center-crosshair">
+        <svg width="34" height="34" viewBox="0 0 34 34">
+          <circle cx="17" cy="17" r="7" fill="none" stroke="#e74c3c" stroke-width="2" />
+          <line x1="17" y1="2" x2="17" y2="10" stroke="#e74c3c" stroke-width="2" stroke-linecap="round"/>
+          <line x1="17" y1="24" x2="17" y2="32" stroke="#e74c3c" stroke-width="2" stroke-linecap="round"/>
+          <line x1="2" y1="17" x2="10" y2="17" stroke="#e74c3c" stroke-width="2" stroke-linecap="round"/>
+          <line x1="24" y1="17" x2="32" y2="17" stroke="#e74c3c" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="17" cy="17" r="1.5" fill="#e74c3c" />
+        </svg>
+      </div>
+
+      <!-- Leaflet Map Canvas -->
+      <div id="map" style="width: 100%; height: 100%;"></div>
+    </div>
+
+    <!-- Live GPS Tracking Console & Multi-Format Exporters -->
+    <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between; background: #ebf5fb; padding: 6px 10px; border-radius: 6px; margin-top: 8px; flex-wrap: wrap;">
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <span style="font-weight: bold; font-size: 12px; color: #2980b9;">🛰️ GPS Track:</span>
+        <button type="button" id="startTrackBtn" onclick="toggleGpsTracking()" class="btn-ok btn-small">▶ Start Track</button>
+        <button type="button" id="clearTrackBtn" onclick="clearGpsTrack()" class="btn-sec btn-small">Clear Track</button>
+        <span id="trackDistance" style="font-size: 12px; font-weight: bold; color: #2c3e50; margin-left: 4px;">Dist: 0.00 km</span>
+      </div>
+      <div style="display: flex; gap: 4px; align-items: center;">
+        <span style="font-size: 11px; font-weight: bold; color: var(--text-muted);">Export:</span>
+        <button type="button" onclick="exportTrackGPX()" class="btn-sec btn-small" style="padding: 3px 6px;">GPX</button>
+        <button type="button" onclick="exportTrackKML()" class="btn-sec btn-small" style="padding: 3px 6px;">KML</button>
+        <button type="button" onclick="exportTrackGeoJSON()" class="btn-sec btn-small" style="padding: 3px 6px;">GeoJSON</button>
+      </div>
+    </div>
+
+    <!-- Raster Map (GeoTIFF / Image) & Vector KML Overlays Accordion -->
     <details style="margin-top:6px; background:#f8f9f9; padding:6px 10px; border-radius:6px; border:1px solid var(--border);">
       <summary style="font-weight:bold; font-size:12px; cursor:pointer; color:var(--primary);">📁 Overlays & Geofence Boundary</summary>
-      <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
-        <input type="file" id="kmlOverlayFile" accept=".kml" style="font-size:11px; width: 180px;">
-        <button type="button" onclick="applyKMLOverlay()" class="btn-small" style="background:#8e44ad;">Add KML</button>
-        <button type="button" onclick="removeKMLOverlay()" class="btn-warn btn-small">Clear KML</button>
+      
+      <!-- Offline GeoTIFF Loader -->
+      <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
+        <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px;">GeoTIFF Map (.tif/.tiff):</label>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+          <input type="file" id="geotiffFileInput" accept=".tif,.tiff" style="font-size:11px; max-width: 190px;">
+          <button type="button" onclick="loadGeoTIFFOverlay()" class="btn-small btn-ok">Render GeoTIFF</button>
+          <button type="button" onclick="removeGeoTIFFOverlay()" class="btn-small btn-danger">Unload</button>
+        </div>
       </div>
-      <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center;">
-        <input id="customMapFile" type="file" accept="image/*" style="font-size:11px; width:150px;">
-        <input id="ovMinLat" type="number" step="any" placeholder="SW Lat" style="width:65px; padding:3px;">
-        <input id="ovMaxLat" type="number" step="any" placeholder="NE Lat" style="width:65px; padding:3px;">
-        <input id="ovMinLon" type="number" step="any" placeholder="SW Lon" style="width:65px; padding:3px;">
-        <input id="ovMaxLon" type="number" step="any" placeholder="NE Lon" style="width:65px; padding:3px;">
-        <button type="button" onclick="applyCustomMapOverlay()" class="btn-small btn-ok">Load Raster</button>
-        <button type="button" onclick="removeCustomMapOverlay()" class="btn-small btn-danger">Unload</button>
+
+      <!-- KML Vector Overlay -->
+      <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
+        <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px;">KML Vector Overlay (.kml):</label>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+          <input type="file" id="kmlOverlayFile" accept=".kml" style="font-size:11px; max-width: 190px;">
+          <button type="button" onclick="applyKMLOverlay()" class="btn-small" style="background:#8e44ad;">Add KML</button>
+          <button type="button" onclick="removeKMLOverlay()" class="btn-warn btn-small">Clear KML</button>
+        </div>
+      </div>
+
+      <!-- Scanned Raster Map Image (2-Corner Calibration) -->
+      <div style="margin-top: 6px;">
+        <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px;">Scanned Map (Image + Bounding Box):</label>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+          <input id="customMapFile" type="file" accept="image/*" style="font-size:11px; width:150px;">
+          <input id="ovMinLat" type="number" step="any" placeholder="SW Lat" style="width:65px; padding:3px;">
+          <input id="ovMaxLat" type="number" step="any" placeholder="NE Lat" style="width:65px; padding:3px;">
+          <input id="ovMinLon" type="number" step="any" placeholder="SW Lon" style="width:65px; padding:3px;">
+          <input id="ovMaxLon" type="number" step="any" placeholder="NE Lon" style="width:65px; padding:3px;">
+          <button type="button" onclick="applyCustomMapOverlay()" class="btn-small btn-ok">Load Raster</button>
+          <button type="button" onclick="removeCustomMapOverlay()" class="btn-small btn-danger">Unload</button>
+        </div>
       </div>
     </details>
-
-    <div id="map"></div>
   </div>
 </div>
 
@@ -758,7 +843,7 @@
     </div>
   </div>
 </div>
-
+  
 <!-- Main Script Engine Loaded Once -->
 <script src="app.js?v=v2.0"></script>
 </body>
