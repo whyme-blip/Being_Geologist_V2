@@ -5,7 +5,7 @@ const APP_VERSION = 'v2.1';
 const CACHE_NAME = `geologger-app-${APP_VERSION}`;
 const TILE_CACHE_NAME = 'geologger-osm-tiles-v1'; // Preserved across app shell bumps
 
-// App shell and core offline dependencies (Leaflet, PDF.js, GeoTIFF, Proj4)
+// App shell and core offline dependencies (Leaflet, Pako, PDF.js, GeoTIFF, Proj4)
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,8 @@ const STATIC_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
   'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  // Zlib Decompression for compressed GeoPDF /GPTS streams
+  'https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js',
   // GeoPDF Engine (PDF.js + Worker)
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
