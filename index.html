@@ -22,6 +22,15 @@
   <script src="https://unpkg.com/georaster"></script>
   <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
   
+<!-- PDF.js Engine for Client-Side GeoPDF Rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    // Configure PDF.js worker
+    if (window['pdfjs-dist/build/pdf']) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+  
   <style>
     :root {
       --primary: #1f3a5f;
@@ -747,9 +756,22 @@
       </div>
     </div>
 
-    <!-- Raster Map (GeoTIFF / Image) & Vector KML Overlays Accordion -->
+    <!-- Raster Map (GeoPDF / GeoTIFF / Image) & Vector KML Overlays Accordion -->
     <details style="margin-top:6px; background:#f8f9f9; padding:6px 10px; border-radius:6px; border:1px solid var(--border);">
       <summary style="font-weight:bold; font-size:12px; cursor:pointer; color:var(--primary);">📁 Overlays & Geofence Boundary</summary>
+
+      <!-- Offline GeoPDF Loader -->
+      <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
+        <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px; color:var(--primary);">
+          📄 Geospatial PDF (.pdf):
+        </label>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+          <input type="file" id="geopdfFileInput" accept="application/pdf" style="font-size:11px; max-width: 190px;">
+          <button type="button" id="renderPdfBtn" onclick="loadGeoPDFOverlay()" class="btn-small btn-ok">Render GeoPDF</button>
+          <button type="button" onclick="removeGeoPDFOverlay()" class="btn-small btn-danger">Unload</button>
+          <span id="pdfLoadingStatus" style="font-size:11px; color:#e67e22; font-weight:bold;"></span>
+        </div>
+      </div>
       
       <!-- Offline GeoTIFF Loader -->
       <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
@@ -787,7 +809,7 @@
     </details>
   </div>
 </div>
-
+  
 <!-- 2. POPUP MODAL: IN-MAP STATION DATA EDITING -->
 <div id="editModal" class="modal">
   <div class="dialog-box">
