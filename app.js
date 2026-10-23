@@ -19,6 +19,10 @@ let customOverlayLayer = null;
 let currentOverlayUrl = null;
 let currentGeoTiffLayer = null;
 
+// GeoPDF Layer Handles
+let currentGeoPdfLayer = null;
+let currentGeoPdfBlobUrl = null;
+
 // Live GPS Blue Dot Handles
 let liveLocationMarker = null;
 let liveAccuracyCircle = null;
@@ -467,10 +471,10 @@ function render() {
   updateMapDisplay();
 }
 
-function toggleRecordSelection(id, isSelected) {
+function toggleRecordSelection(id, isChecked) {
   const rec = records.find(r => r.id === id);
   if (rec) {
-    rec.selectedForDelete = isSelected;
+    rec.selectedForDelete = isChecked;
     persist();
   }
 }
@@ -543,7 +547,7 @@ function getPlanarSvgIcon(strike, dip, type) {
   const dipVal = (dip !== undefined && dip !== '') ? dip : '';
   const structColor = getStructureColor(type);
 
-  // Offset by -90° to align the horizontal SVG base with true North (000°)
+  // Offset by -90° to align horizontal SVG base with true North (000°)
   const planarRotation = (strikeDeg - 90 + 360) % 360;
 
   const svg = `
@@ -854,7 +858,6 @@ function toggleGpsTracking() {
 
     trackWatchId = navigator.geolocation.watchPosition(
       pos => {
-        // Enforce sub-25m satellite accuracy threshold
         if (pos.coords.accuracy > 25) return;
 
         const newPt = [
@@ -864,7 +867,6 @@ function toggleGpsTracking() {
           new Date().toISOString()
         ];
 
-        // 5-meter movement filter
         if (gpsTrackPoints.length > 0) {
           const last = gpsTrackPoints[gpsTrackPoints.length - 1];
           const dist = L.latLng(last[0], last[1]).distanceTo(L.latLng(newPt[0], newPt[1]));
@@ -963,8 +965,175 @@ function exportTrackGeoJSON() {
 }
 
 // ==========================================
-// 12. OFFLINE MAP OVERLAYS (GEOTIFF / KML / IMAGE)
+// 12. OFFLINE MAP OVERLAYS (GEOPDF / GEOTIFF / KML / IMAGE)
 // ==========================================
+
+// Helper: Inspects raw PDF bytes for ISO 32000 / Adobe Geospatial measure dictionaries
+function extractGeoPdfCoordinates(pdfText) {
+  // 1. Try ISO 32000 / Adobe Geospatial /GPTS (Geographic Points: Lat1 Lon1 Lat2 Lon2 ...)
+  const gptsRegex = /\/GPTS\s*\[\s*([0-9.\s-]+)\s*\]/;
+  const gptsMatch = pdfText.match(gptsRegex);
+  if (gptsMatch && gptsMatch[1]) {
+    const rawCoords = gptsMatch[1].trim().split(/\s+/).map(Number);
+    if (rawCoords.length >= 8) {
+      const lats = [rawCoords[0], rawCoords[2], rawCoords[4], rawCoords[6]].filter(n => !isNaN(n));
+      const lons = [rawCoords[1], rawCoords[3], rawCoords[5], rawCoords[7]].filter(n => !isNaN(n));
+      return [
+        [Math.min(...lats), Math.min(...lons)], // SW [minLat, minLon]
+        [Math.max(...lats), Math.max(...lons)]  // NE [maxLat, maxLon]
+      ];
+    }
+  }
+
+  // 2. Try OGC GeoPDF / Neatline /BBox definitions
+  const bboxRegex = /\/BBox\s*\[\s*([0-9.\s-]+)\s*\]/;
+  const bboxMatch = pdfText.match(bboxRegex);
+  if (bboxMatch && bboxMatch[1]) {
+    const parts = bboxMatch[1].trim().split(/\s+/).map(Number);
+    if (parts.length === 4 && parts.every(n => Math.abs(n) <= 180)) {
+      return [
+        [Math.min(parts[1], parts[3]), Math.min(parts[0], parts[2])], // SW
+        [Math.max(parts[1], parts[3]), Math.max(parts[0], parts[2])]  // NE
+      ];
+    }
+  }
+
+  // 3. Fallback: Search for embedded WGS84 Decimal Degree coordinate tags
+  const ddRegex = /(-?\d{1,2}\.\d{4,8})[\s,]+(-?\d{1,3}\.\d{4,8})/g;
+  let matches = [];
+  let m;
+  while ((m = ddRegex.exec(pdfText)) !== null) {
+    const v1 = parseFloat(m[1]), v2 = parseFloat(m[2]);
+    if (Math.abs(v1) <= 90 && Math.abs(v2) <= 180) {
+      matches.push([v1, v2]);
+    }
+  }
+
+  if (matches.length >= 4) {
+    const lats = matches.map(p => p[0]);
+    const lons = matches.map(p => p[1]);
+    return [
+      [Math.min(...lats), Math.min(...lons)],
+      [Math.max(...lats), Math.max(...lons)]
+    ];
+  }
+
+  return null;
+}
+
+async function loadGeoPDFOverlay() {
+  const fileInput = document.getElementById('geopdfFileInput');
+  const file = fileInput ? fileInput.files[0] : null;
+  const statusEl = document.getElementById('pdfLoadingStatus');
+  const renderBtn = document.getElementById('renderPdfBtn');
+
+  if (!file) {
+    alert("Please select a GeoPDF (.pdf) file first.");
+    return;
+  }
+  if (!mapInstance) {
+    alert("Please open the field map first.");
+    return;
+  }
+  if (typeof pdfjsLib === 'undefined') {
+    alert("PDF.js engine is still loading or CDN script is blocked. Check connection.");
+    return;
+  }
+
+  try {
+    if (statusEl) statusEl.textContent = 'Parsing GeoPDF...';
+    if (renderBtn) renderBtn.disabled = true;
+
+    const arrayBuffer = await file.arrayBuffer();
+
+    // Scan up to first 2MB where geospatial catalog and dictionary streams reside
+    const bytes = new Uint8Array(arrayBuffer);
+    let binaryString = '';
+    const chunk = 8192;
+    const scanLimit = Math.min(bytes.length, 2097152);
+    for (let i = 0; i < scanLimit; i += chunk) {
+      binaryString += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+
+    let bounds = extractGeoPdfCoordinates(binaryString);
+
+    // Fallback prompt if PDF lacks standard internal metadata tags
+    if (!bounds) {
+      const promptCoords = prompt(
+        "Geospatial tags (/GPTS /BBox) not automatically detected.\n\nEnter bounding box: MinLat, MinLon, MaxLat, MaxLon\n(e.g., 30.70, 78.10, 30.85, 78.30):"
+      );
+      if (promptCoords) {
+        const parts = promptCoords.split(',').map(s => parseFloat(s.trim()));
+        if (parts.length === 4 && parts.every(n => !isNaN(n))) {
+          bounds = [[parts[0], parts[1]], [parts[2], parts[3]]];
+        }
+      }
+    }
+
+    if (!bounds) {
+      if (statusEl) statusEl.textContent = '';
+      if (renderBtn) renderBtn.disabled = false;
+      alert("Could not extract geographic bounds from this PDF file.");
+      return;
+    }
+
+    if (statusEl) statusEl.textContent = 'Rendering Page 1...';
+
+    // Render Page 1 to off-screen HTML5 canvas using PDF.js
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+
+    const viewport = page.getViewport({ scale: 1.5 });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    await page.render({
+      canvasContext: ctx,
+      viewport: viewport
+    }).promise;
+
+    canvas.toBlob(blob => {
+      removeGeoPDFOverlay(false);
+
+      currentGeoPdfBlobUrl = URL.createObjectURL(blob);
+      currentGeoPdfLayer = L.imageOverlay(currentGeoPdfBlobUrl, bounds, {
+        opacity: 0.85,
+        interactive: true
+      }).addTo(mapInstance);
+
+      mapInstance.fitBounds(bounds);
+
+      if (statusEl) statusEl.textContent = 'Ready';
+      if (renderBtn) renderBtn.disabled = false;
+      alert(`GeoPDF successfully rendered!\nBounds: ${bounds[0][0].toFixed(4)}, ${bounds[0][1].toFixed(4)} to ${bounds[1][0].toFixed(4)}, ${bounds[1][1].toFixed(4)}`);
+    }, 'image/png');
+
+  } catch (err) {
+    if (statusEl) statusEl.textContent = '';
+    if (renderBtn) renderBtn.disabled = false;
+    alert("GeoPDF Render Error: " + err.message);
+  }
+}
+
+function removeGeoPDFOverlay(showAlert = true) {
+  if (currentGeoPdfLayer && mapInstance) {
+    mapInstance.removeLayer(currentGeoPdfLayer);
+    currentGeoPdfLayer = null;
+  }
+  if (currentGeoPdfBlobUrl) {
+    URL.revokeObjectURL(currentGeoPdfBlobUrl);
+    currentGeoPdfBlobUrl = null;
+  }
+  const fileInput = document.getElementById('geopdfFileInput');
+  if (fileInput) fileInput.value = '';
+  const statusEl = document.getElementById('pdfLoadingStatus');
+  if (statusEl) statusEl.textContent = '';
+  if (showAlert) alert("GeoPDF map sheet removed.");
+}
+
 function loadGeoTIFFOverlay() {
   const fileInput = document.getElementById('geotiffFileInput');
   const file = fileInput ? fileInput.files[0] : null;
