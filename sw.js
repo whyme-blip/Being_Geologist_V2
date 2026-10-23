@@ -1,11 +1,11 @@
 // =========================================================
-// VERSION DEFINITION (Bump this to 'v2.1', 'v2.2', etc.)
+// VERSION DEFINITION (Bumped to v2.1 for GeoPDF & GeoTIFF)
 // =========================================================
-const APP_VERSION = 'v2.0';
+const APP_VERSION = 'v2.1';
 const CACHE_NAME = `geologger-app-${APP_VERSION}`;
-const TILE_CACHE_NAME = 'geologger-osm-tiles-v1'; // Map tiles preserved across app updates
+const TILE_CACHE_NAME = 'geologger-osm-tiles-v1'; // Preserved across app shell bumps
 
-// App shell and core static libraries required offline
+// App shell and core offline dependencies (Leaflet, PDF.js, GeoTIFF, Proj4)
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -13,13 +13,21 @@ const STATIC_ASSETS = [
   `./app.js?v=${APP_VERSION}`,
   './icon-192.png',
   './icon-512.png',
+  // Leaflet & Icons
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+  'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  // GeoPDF Engine (PDF.js + Worker)
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
+  // GeoTIFF & Reprojection Engine
+  'https://unpkg.com/proj4',
+  'https://unpkg.com/georaster',
+  'https://unpkg.com/georaster-layer-for-leaflet'
 ];
 
-// 1. INSTALL: Pre-cache static shell & force skipWaiting
+// 1. INSTALL: Pre-cache static shell & activate immediately
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -30,15 +38,14 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// 2. ACTIVATE: Automatically purge all legacy app caches while preserving cached map tiles
+// 2. ACTIVATE: Purge previous version app caches while preserving offline map tiles
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
-          // Delete old app versions, but keep the OSM map tiles intact
           if (key !== CACHE_NAME && key !== TILE_CACHE_NAME) {
-            console.log(`[SW] Purging old cache: ${key}`);
+            console.log(`[SW] Purging outdated cache: ${key}`);
             return caches.delete(key);
           }
         })
@@ -73,7 +80,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // B. Navigation / HTML: Network-First, Cache fallback (Ensures latest UI online, keeps working offline)
+  // B. Navigation / HTML: Network-First, Cache fallback (Ensures latest code online, offline durability)
   if (event.request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname === '/') {
     event.respondWith(
       fetch(event.request)
