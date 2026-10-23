@@ -968,44 +968,110 @@ function exportTrackGeoJSON() {
 // 12. OFFLINE MAP OVERLAYS (GEOPDF / GEOTIFF / KML / IMAGE)
 // ==========================================
 
-// Helper: Inspects raw PDF bytes for ISO 32000 / Adobe Geospatial measure dictionaries
-function extractGeoPdfCoordinates(pdfText) {
-  // 1. Try ISO 32000 / Adobe Geospatial /GPTS (Geographic Points: Lat1 Lon1 Lat2 Lon2 ...)
-  const gptsRegex = /\/GPTS\s*\[\s*([0-9.\s-]+)\s*\]/;
-  const gptsMatch = pdfText.match(gptsRegex);
+// Helper: Convert UTM/projected meters to WGS84 decimal degrees if needed
+function projectToWGS84(x, y, gcsStr) {
+  // If coordinates are already geographic decimal degrees (-90..90, -180..180)
+  if (Math.abs(y) <= 90 && Math.abs(x) <= 180) {
+    return [y, x]; // [lat, lon]
+  }
+
+  // Detect UTM Zone from GCS string or fallback to regional default (Zone 43N / 44N)
+  let utmZone = 43;
+  const zoneMatch = gcsStr ? gcsStr.match(/UTM\s*zone\s*(\d+)/i) : null;
+  if (zoneMatch && zoneMatch[1]) {
+    utmZone = parseInt(zoneMatch[1], 10);
+  }
+
+  try {
+    if (typeof proj4 !== 'undefined') {
+      const utmProj = `+proj=utm +zone=${utmZone} +datum=WGS84 +units=m +no_defs`;
+      const wgs84 = proj4(utmProj, 'EPSG:4326', [x, y]);
+      return [wgs84[1], wgs84[0]]; // [lat, lon]
+    }
+  } catch (e) {
+    console.warn("Proj4 transformation error:", e);
+  }
+
+  return [y, x];
+}
+
+function processGptsArray(pts, gcsContext) {
+  let coords = [];
+  for (let i = 0; i < pts.length; i += 2) {
+    const v1 = pts[i];
+    const v2 = pts[i + 1];
+    if (v1 !== undefined && v2 !== undefined) {
+      coords.push(projectToWGS84(v2, v1, gcsContext));
+    }
+  }
+
+  const lats = coords.map(c => c[0]);
+  const lons = coords.map(c => c[1]);
+  return [
+    [Math.min(...lats), Math.min(...lons)], // SW
+    [Math.max(...lats), Math.max(...lons)]  // NE
+  ];
+}
+
+// Deep scanner across both decompressed PDF objects and raw stream headers
+async function parseGeospatialPdfBounds(pdfDoc, rawBuffer) {
+  // 1. Inspect page dictionaries via PDF.js internal object representation
+  try {
+    const page = await pdfDoc.getPage(1);
+    if (page._pageInfo && page._pageInfo.viewports) {
+      const vps = page._pageInfo.viewports;
+      for (let vp of vps) {
+        if (vp.Measure && vp.Measure.GPTS) {
+          return processGptsArray(vp.Measure.GPTS, JSON.stringify(vp.Measure.GCS || ''));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("PDF.js internal dictionary inspection skipped:", err);
+  }
+
+  // 2. Scan text across byte buffers (for uncompressed or stream-level headers)
+  const bytes = new Uint8Array(rawBuffer);
+  let text = "";
+  const chunk = 16384;
+  const scanLimit = Math.min(bytes.length, 4194304); // Scan up to first 4MB
+  for (let i = 0; i < scanLimit; i += chunk) {
+    text += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, scanLimit)));
+  }
+
+  // Regex 1: /GPTS [lat1 lon1 lat2 lon2 ...]
+  const gptsRegex = /\/GPTS\s*\[\s*([0-9.,\s-]+)\s*\]/i;
+  const gptsMatch = text.match(gptsRegex);
   if (gptsMatch && gptsMatch[1]) {
-    const rawCoords = gptsMatch[1].trim().split(/\s+/).map(Number);
-    if (rawCoords.length >= 8) {
-      const lats = [rawCoords[0], rawCoords[2], rawCoords[4], rawCoords[6]].filter(n => !isNaN(n));
-      const lons = [rawCoords[1], rawCoords[3], rawCoords[5], rawCoords[7]].filter(n => !isNaN(n));
-      return [
-        [Math.min(...lats), Math.min(...lons)], // SW [minLat, minLon]
-        [Math.max(...lats), Math.max(...lons)]  // NE [maxLat, maxLon]
-      ];
+    const pts = gptsMatch[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+    if (pts.length >= 8) {
+      return processGptsArray(pts, text);
     }
   }
 
-  // 2. Try OGC GeoPDF / Neatline /BBox definitions
-  const bboxRegex = /\/BBox\s*\[\s*([0-9.\s-]+)\s*\]/;
-  const bboxMatch = pdfText.match(bboxRegex);
+  // Regex 2: /BBox [xMin yMin xMax yMax]
+  const bboxRegex = /\/BBox\s*\[\s*([0-9.,\s-]+)\s*\]/i;
+  const bboxMatch = text.match(bboxRegex);
   if (bboxMatch && bboxMatch[1]) {
-    const parts = bboxMatch[1].trim().split(/\s+/).map(Number);
-    if (parts.length === 4 && parts.every(n => Math.abs(n) <= 180)) {
+    const b = bboxMatch[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+    if (b.length === 4) {
+      const pt1 = projectToWGS84(b[0], b[1], text);
+      const pt2 = projectToWGS84(b[2], b[3], text);
       return [
-        [Math.min(parts[1], parts[3]), Math.min(parts[0], parts[2])], // SW
-        [Math.max(parts[1], parts[3]), Math.max(parts[0], parts[2])]  // NE
+        [Math.min(pt1[0], pt2[0]), Math.min(pt1[1], pt2[1])],
+        [Math.max(pt1[0], pt2[0]), Math.max(pt1[1], pt2[1])]
       ];
     }
   }
 
-  // 3. Fallback: Search for embedded WGS84 Decimal Degree coordinate tags
-  const ddRegex = /(-?\d{1,2}\.\d{4,8})[\s,]+(-?\d{1,3}\.\d{4,8})/g;
+  // Regex 3: ISO 32000 Neatline coordinate pairs
+  const neatlineRegex = /(-?\d{1,2}\.\d{4,8})[\s,]+(-?\d{1,3}\.\d{4,8})/g;
   let matches = [];
   let m;
-  while ((m = ddRegex.exec(pdfText)) !== null) {
-    const v1 = parseFloat(m[1]), v2 = parseFloat(m[2]);
-    if (Math.abs(v1) <= 90 && Math.abs(v2) <= 180) {
-      matches.push([v1, v2]);
+  while ((m = neatlineRegex.exec(text)) !== null) {
+    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      matches.push([lat, lon]);
     }
   }
 
@@ -1036,34 +1102,30 @@ async function loadGeoPDFOverlay() {
     return;
   }
   if (typeof pdfjsLib === 'undefined') {
-    alert("PDF.js engine is still loading or CDN script is blocked. Check connection.");
+    alert("PDF.js engine is still loading or CDN was blocked. Check connection.");
     return;
   }
 
   try {
-    if (statusEl) statusEl.textContent = 'Parsing GeoPDF...';
+    if (statusEl) statusEl.textContent = 'Reading GeoPDF...';
     if (renderBtn) renderBtn.disabled = true;
 
     const arrayBuffer = await file.arrayBuffer();
 
-    // Scan up to first 2MB where geospatial catalog and dictionary streams reside
-    const bytes = new Uint8Array(arrayBuffer);
-    let binaryString = '';
-    const chunk = 8192;
-    const scanLimit = Math.min(bytes.length, 2097152);
-    for (let i = 0; i < scanLimit; i += chunk) {
-      binaryString += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-    }
+    // 1. Initialize PDF.js document
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdfDoc = await loadingTask.promise;
 
-    let bounds = extractGeoPdfCoordinates(binaryString);
+    if (statusEl) statusEl.textContent = 'Extracting spatial tags...';
+    let bounds = await parseGeospatialPdfBounds(pdfDoc, arrayBuffer);
 
-    // Fallback prompt if PDF lacks standard internal metadata tags
+    // Fallback prompt only if all automated decompression routines encounter no tags
     if (!bounds) {
       const promptCoords = prompt(
-        "Geospatial tags (/GPTS /BBox) not automatically detected.\n\nEnter bounding box: MinLat, MinLon, MaxLat, MaxLon\n(e.g., 30.70, 78.10, 30.85, 78.30):"
+        "Notice: Geospatial tags (/GPTS /BBox) were not detected in the document streams.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\n(e.g., 30.75, 77.80, 31.00, 78.10)"
       );
       if (promptCoords) {
-        const parts = promptCoords.split(',').map(s => parseFloat(s.trim()));
+        const parts = promptCoords.split(/[\s,]+/).map(Number);
         if (parts.length === 4 && parts.every(n => !isNaN(n))) {
           bounds = [[parts[0], parts[1]], [parts[2], parts[3]]];
         }
@@ -1073,17 +1135,14 @@ async function loadGeoPDFOverlay() {
     if (!bounds) {
       if (statusEl) statusEl.textContent = '';
       if (renderBtn) renderBtn.disabled = false;
-      alert("Could not extract geographic bounds from this PDF file.");
+      alert("Could not extract or calibrate geographic bounds.");
       return;
     }
 
-    if (statusEl) statusEl.textContent = 'Rendering Page 1...';
+    if (statusEl) statusEl.textContent = 'Rasterizing Page 1...';
 
-    // Render Page 1 to off-screen HTML5 canvas using PDF.js
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    const page = await pdf.getPage(1);
-
+    // 2. Render Page 1 to Off-Screen Canvas
+    const page = await pdfDoc.getPage(1);
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1095,6 +1154,7 @@ async function loadGeoPDFOverlay() {
       viewport: viewport
     }).promise;
 
+    // 3. Attach canvas as Leaflet ImageOverlay
     canvas.toBlob(blob => {
       removeGeoPDFOverlay(false);
 
@@ -1108,13 +1168,13 @@ async function loadGeoPDFOverlay() {
 
       if (statusEl) statusEl.textContent = 'Ready';
       if (renderBtn) renderBtn.disabled = false;
-      alert(`GeoPDF successfully rendered!\nBounds: ${bounds[0][0].toFixed(4)}, ${bounds[0][1].toFixed(4)} to ${bounds[1][0].toFixed(4)}, ${bounds[1][1].toFixed(4)}`);
+      alert(`GeoPDF Map successfully overlaid!\nBounds: ${bounds[0][0].toFixed(5)}, ${bounds[0][1].toFixed(5)} to ${bounds[1][0].toFixed(5)}, ${bounds[1][1].toFixed(5)}`);
     }, 'image/png');
 
   } catch (err) {
     if (statusEl) statusEl.textContent = '';
     if (renderBtn) renderBtn.disabled = false;
-    alert("GeoPDF Render Error: " + err.message);
+    alert("GeoPDF Load Error: " + err.message);
   }
 }
 
