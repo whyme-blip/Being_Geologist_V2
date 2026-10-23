@@ -968,13 +968,18 @@ function exportTrackGeoJSON() {
 // 12. OFFLINE MAP OVERLAYS (GEOPDF / GEOTIFF / KML / IMAGE)
 // ==========================================
 
-// Helper: Convert UTM/projected meters to WGS84 decimal degrees if needed
+// Helper: Convert UTM/projected meters or reverse lat/lon to WGS84 [lat, lon]
 function projectToWGS84(x, y, gcsStr) {
+  // If coordinates are already in decimal degrees
   if (Math.abs(y) <= 90 && Math.abs(x) <= 180) {
-    return [y, x]; // Already decimal degrees [lat, lon]
+    return [y, x];
+  }
+  if (Math.abs(x) <= 90 && Math.abs(y) <= 180) {
+    return [x, y];
   }
 
-  let utmZone = 43; // Default zone for Himachal Pradesh / NW Himalaya
+  // Detect UTM Zone from GCS string or default to regional Zone 43N / 44N
+  let utmZone = 43;
   const zoneMatch = gcsStr ? gcsStr.match(/UTM\s*zone\s*(\d+)/i) : null;
   if (zoneMatch && zoneMatch[1]) {
     utmZone = parseInt(zoneMatch[1], 10);
@@ -984,7 +989,7 @@ function projectToWGS84(x, y, gcsStr) {
     if (typeof proj4 !== 'undefined') {
       const utmProj = `+proj=utm +zone=${utmZone} +datum=WGS84 +units=m +no_defs`;
       const wgs84 = proj4(utmProj, 'EPSG:4326', [x, y]);
-      return [wgs84[1], wgs84[0]]; // [lat, lon]
+      return [wgs84[1], wgs84[0]];
     }
   } catch (e) {
     console.warn("Proj4 transformation error:", e);
@@ -998,10 +1003,12 @@ function processGptsArray(pts, gcsContext) {
   for (let i = 0; i < pts.length; i += 2) {
     const v1 = pts[i];
     const v2 = pts[i + 1];
-    if (v1 !== undefined && v2 !== undefined) {
+    if (v1 !== undefined && v2 !== undefined && !isNaN(v1) && !isNaN(v2)) {
       coords.push(projectToWGS84(v2, v1, gcsContext));
     }
   }
+
+  if (coords.length === 0) return null;
 
   const lats = coords.map(c => c[0]);
   const lons = coords.map(c => c[1]);
@@ -1011,119 +1018,87 @@ function processGptsArray(pts, gcsContext) {
   ];
 }
 
-// Convert DMS strings ("30°59'N", "77°35'E", "30-50N", "30°50'") to Decimal Degrees
-function parseDmsStringToDecimal(str) {
-  if (!str) return null;
-  const clean = str.replace(/[–—]/g, '-').trim();
-  const match = clean.match(/(\d{1,3})[°\s-]+(?:(\d{1,2})['′\s]*)?(?:(\d{1,2}(?:\.\d+)?)["″\s]*)?([NSEW])?/i);
-  if (!match) return null;
+// Scans binary buffer, inflates zlib streams, and parses /GPTS and /BBox dictionaries
+function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
+  const bytes = new Uint8Array(rawBuffer);
+  const textDecoder = new TextDecoder('latin1');
 
-  const deg = parseFloat(match[1]);
-  const min = match[2] ? parseFloat(match[2]) : 0;
-  const sec = match[3] ? parseFloat(match[3]) : 0;
-  let hemi = match[4] ? match[4].toUpperCase() : '';
+  // 1. First scan uncompressed strings in raw file
+  const fullText = textDecoder.decode(bytes);
+  const rawGpts = scanTextForGpts(fullText);
+  if (rawGpts) return rawGpts;
 
-  // If hemisphere letter is omitted, infer from coordinate range
-  if (!hemi) {
-    if (deg >= 25 && deg <= 38) hemi = 'N';      // Regional Latitude span
-    else if (deg >= 70 && deg <= 85) hemi = 'E'; // Regional Longitude span
-  }
+  // 2. If uncompressed scan fails, decompress FlateDecode streams using Pako
+  if (typeof pako !== 'undefined') {
+    const streamToken = [115, 116, 114, 101, 97, 109]; // 'stream'
+    const endstreamToken = [101, 110, 100, 115, 116, 114, 101, 97, 109]; // 'endstream'
 
-  let dd = deg + (min / 60) + (sec / 3600);
-  if (hemi === 'S' || hemi === 'W') dd = -dd;
-  return dd;
-}
-
-// Scans decompressed text elements on the sheet margin for neatline graticule values
-async function extractBoundsFromPageText(page) {
-  try {
-    const textContent = await page.getTextContent();
-    const lats = [];
-    const lons = [];
-
-    textContent.items.forEach(item => {
-      const s = item.str.trim();
-      if (!s || s.length < 3) return;
-
-      // Match Latitude (e.g., 30°50'N, 30°59', 30 55'N)
-      if ((/[NS]/i.test(s) && /\d{2}[°\s-]/.test(s)) || /^3[01][°\s-]\d{2}/.test(s)) {
-        const lat = parseDmsStringToDecimal(s);
-        if (lat !== null && lat >= 30.0 && lat <= 32.5) {
-          lats.push(lat);
+    let pos = 0;
+    while (pos < bytes.length) {
+      // Find start of stream
+      let streamStart = -1;
+      for (let i = pos; i < bytes.length - 6; i++) {
+        if (bytes[i] === 115 && bytes[i+1] === 116 && bytes[i+2] === 114 && bytes[i+3] === 101 && bytes[i+4] === 97 && bytes[i+5] === 109) {
+          streamStart = i + 6;
+          // Skip optional newline (\r, \n) after 'stream' keyword
+          if (bytes[streamStart] === 13) streamStart++;
+          if (bytes[streamStart] === 10) streamStart++;
+          break;
         }
       }
 
-      // Match Longitude (e.g., 77°31'E, 77°35', 77°45'E, 77-35')
-      if ((/[EW]/i.test(s) && /\d{2,3}[°\s-]/.test(s)) || /^7[678][°\s-]\d{2}/.test(s)) {
-        const lon = parseDmsStringToDecimal(s);
-        if (lon !== null && lon >= 76.5 && lon <= 78.8) {
-          lons.push(lon);
+      if (streamStart === -1) break;
+
+      // Find end of stream
+      let streamEnd = -1;
+      for (let i = streamStart; i < Math.min(bytes.length - 9, streamStart + 2000000); i++) {
+        if (bytes[i] === 101 && bytes[i+1] === 110 && bytes[i+2] === 100 && bytes[i+3] === 115) {
+          streamEnd = i;
+          break;
         }
       }
-    });
 
-    if (lats.length >= 2 && lons.length >= 2) {
-      const minLat = Math.min(...lats);
-      const maxLat = Math.max(...lats);
-      const minLon = Math.min(...lons);
-      const maxLon = Math.max(...lons);
-
-      if (maxLat > minLat && maxLon > minLon) {
-        return [
-          [minLat, minLon],
-          [maxLat, maxLon]
-        ];
+      if (streamEnd === -1) {
+        pos = streamStart + 1;
+        continue;
       }
+
+      // Slice stream data and attempt zlib inflate
+      const streamChunk = bytes.subarray(streamStart, streamEnd);
+      try {
+        const inflated = pako.inflate(streamChunk);
+        const decompressedText = textDecoder.decode(inflated);
+        const bounds = scanTextForGpts(decompressedText);
+        if (bounds) return bounds;
+      } catch (err) {
+        // Not a zlib compressed stream (image pixel stream, etc.) - continue scanning
+      }
+
+      pos = streamEnd + 9;
     }
-  } catch (e) {
-    console.warn("Text content parsing error:", e);
   }
+
   return null;
 }
 
-// Deep scanner across both metadata streams and decompressed page text
-async function parseGeospatialPdfBounds(pdfDoc, page, rawBuffer) {
-  // Method 1: Check document metadata catalog (Adobe Geospatial & OGC dictionary)
-  try {
-    const meta = await pdfDoc.getMetadata();
-    if (meta && meta.info) {
-      const infoStr = JSON.stringify(meta.info);
-      const gptsMatch = infoStr.match(/\/GPTS\s*\[\s*([0-9.,\s-]+)\s*\]/i);
-      if (gptsMatch && gptsMatch[1]) {
-        const pts = gptsMatch[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
-        if (pts.length >= 8) return processGptsArray(pts, infoStr);
-      }
-    }
-  } catch (err) {
-    console.warn("Document metadata inspection skipped:", err);
-  }
+function scanTextForGpts(text) {
+  if (!text) return null;
 
-  // Method 2: Scan decompressed text content for graticule marks
-  const textBounds = await extractBoundsFromPageText(page);
-  if (textBounds) {
-    return textBounds;
-  }
-
-  // Method 3: Scan raw bytes for uncompressed /GPTS or /BBox headers
-  const bytes = new Uint8Array(rawBuffer);
-  let text = "";
-  const chunk = 16384;
-  const scanLimit = Math.min(bytes.length, 4194304);
-  for (let i = 0; i < scanLimit; i += chunk) {
-    text += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, scanLimit)));
-  }
-
+  // Pattern A: /GPTS [lat1 lon1 lat2 lon2 ...]
   const gptsRegex = /\/GPTS\s*\[\s*([0-9.,\s-]+)\s*\]/i;
-  const gptsMatch = text.match(gptsRegex);
-  if (gptsMatch && gptsMatch[1]) {
-    const pts = gptsMatch[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
-    if (pts.length >= 8) return processGptsArray(pts, text);
+  const m = text.match(gptsRegex);
+  if (m && m[1]) {
+    const pts = m[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+    if (pts.length >= 8) {
+      return processGptsArray(pts, text);
+    }
   }
 
+  // Pattern B: /BBox [xMin yMin xMax yMax]
   const bboxRegex = /\/BBox\s*\[\s*([0-9.,\s-]+)\s*\]/i;
-  const bboxMatch = text.match(bboxRegex);
-  if (bboxMatch && bboxMatch[1]) {
-    const b = bboxMatch[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+  const bMatch = text.match(bboxRegex);
+  if (bMatch && bMatch[1]) {
+    const b = bMatch[1].trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
     if (b.length === 4) {
       const pt1 = projectToWGS84(b[0], b[1], text);
       const pt2 = projectToWGS84(b[2], b[3], text);
@@ -1152,7 +1127,7 @@ async function loadGeoPDFOverlay() {
     return;
   }
   if (typeof pdfjsLib === 'undefined') {
-    alert("PDF.js engine is still loading or CDN was blocked. Check connection.");
+    alert("PDF.js engine is still loading. Check connection.");
     return;
   }
 
@@ -1162,18 +1137,13 @@ async function loadGeoPDFOverlay() {
 
     const arrayBuffer = await file.arrayBuffer();
 
-    // 1. Initialize PDF.js document and load Page 1
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdfDoc = await loadingTask.promise;
-    const page = await pdfDoc.getPage(1);
+    if (statusEl) statusEl.textContent = 'Decompressing /GPTS tags...';
+    let bounds = extractGeoPdfCoordinatesFromBinary(arrayBuffer);
 
-    if (statusEl) statusEl.textContent = 'Extracting spatial tags...';
-    let bounds = await parseGeospatialPdfBounds(pdfDoc, page, arrayBuffer);
-
-    // 2. Fallback prompt if tags cannot be parsed automatically
+    // Fallback prompt only if document contains no spatial dictionary
     if (!bounds) {
       const promptCoords = prompt(
-        "Notice: Geospatial tags (/GPTS /BBox) were not detected in the document streams.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal), use:\n30.833333, 77.516667, 30.983333, 77.750000"
+        "Notice: Geospatial /GPTS tags not detected.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal/Nerwa), paste:\n30.833333, 77.516667, 30.983333, 77.750000"
       );
       if (promptCoords) {
         const parts = promptCoords.split(/[\s,]+/).map(Number);
@@ -1186,13 +1156,17 @@ async function loadGeoPDFOverlay() {
     if (!bounds) {
       if (statusEl) statusEl.textContent = '';
       if (renderBtn) renderBtn.disabled = false;
-      alert("Could not extract or calibrate geographic bounds.");
+      alert("Could not extract geographic bounds.");
       return;
     }
 
     if (statusEl) statusEl.textContent = 'Rasterizing Page 1...';
 
-    // 3. Render Page 1 to Off-Screen Canvas
+    // Render Page 1 to Off-Screen Canvas
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdfDoc = await loadingTask.promise;
+    const page = await pdfDoc.getPage(1);
+
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1204,7 +1178,7 @@ async function loadGeoPDFOverlay() {
       viewport: viewport
     }).promise;
 
-    // 4. Attach canvas as Leaflet ImageOverlay
+    // Attach canvas to Leaflet ImageOverlay
     canvas.toBlob(blob => {
       removeGeoPDFOverlay(false);
 
