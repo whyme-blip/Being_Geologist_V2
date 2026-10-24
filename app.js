@@ -1221,7 +1221,7 @@ function scanTextForGpts(text) {
 }
 
 // ------------------------------------------
-// OVERLAY CALIBRATION & NUDGE CONTROLS
+// OVERLAY CALIBRATION, NUDGE & OPACITY CONTROLS
 // ------------------------------------------
 function showNudgeControls(bounds) {
   activeOverlayBounds = [
@@ -1234,9 +1234,27 @@ function showNudgeControls(bounds) {
   overlayLonOffset = savedOffset.lon || 0;
 
   const nudgeBar = document.getElementById('overlayNudgeControls');
-  if (nudgeBar) nudgeBar.style.display = 'block';
+  if (nudgeBar) {
+    nudgeBar.style.display = 'block';
+  }
+
+  // Reset opacity slider UI to default 85%
+  const slider = document.getElementById('overlayOpacitySlider');
+  if (slider) slider.value = 0.85;
+  const label = document.getElementById('overlayOpacityVal');
+  if (label) label.textContent = '85%';
 
   applyNudgedBounds();
+}
+
+function changeOverlayOpacity(val) {
+  const opacity = parseFloat(val);
+  const label = document.getElementById('overlayOpacityVal');
+  if (label) label.textContent = Math.round(opacity * 100) + '%';
+
+  if (currentGeoPdfLayer) currentGeoPdfLayer.setOpacity(opacity);
+  if (currentGeoTiffLayer) currentGeoTiffLayer.setOpacity(opacity);
+  if (customOverlayLayer) customOverlayLayer.setOpacity(opacity);
 }
 
 function nudgeOverlay(dirX, dirY) {
@@ -1273,7 +1291,7 @@ function applyNudgedBounds() {
   const metersE = Math.round(overlayLonOffset * (111139 * Math.cos(nudgedBounds[0][0] * Math.PI / 180)));
   const display = document.getElementById('nudgeOffsetDisplay');
   if (display) {
-    display.textContent = `ΔN: ${metersN > 0 ? '+' : ''}${metersN}m | ΔE: ${metersE > 0 ? '+' : ''}${metersE}m`;
+    display.textContent = `ΔN: ${metersN >= 0 ? '+' : ''}${metersN}m | ΔE: ${metersE >= 0 ? '+' : ''}${metersE}m`;
   }
 }
 
