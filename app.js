@@ -1223,6 +1223,20 @@ function scanTextForGpts(text) {
 // ------------------------------------------
 // OVERLAY CALIBRATION, NUDGE & OPACITY CONTROLS
 // ------------------------------------------
+function toggleNudgeControls() {
+  const nudgeBar = document.getElementById('overlayNudgeControls');
+  if (!nudgeBar) return;
+  const isHidden = (nudgeBar.style.display === 'none' || !nudgeBar.style.display);
+  nudgeBar.style.display = isHidden ? 'block' : 'none';
+  if (isHidden && !activeOverlayBounds && currentGeoPdfLayer) {
+    const b = currentGeoPdfLayer.getBounds();
+    activeOverlayBounds = [
+      [b.getSouth(), b.getWest()],
+      [b.getNorth(), b.getEast()]
+    ];
+  }
+}
+
 function showNudgeControls(bounds) {
   activeOverlayBounds = [
     [bounds[0][0], bounds[0][1]],
@@ -1238,7 +1252,6 @@ function showNudgeControls(bounds) {
     nudgeBar.style.display = 'block';
   }
 
-  // Reset opacity slider UI to default 85%
   const slider = document.getElementById('overlayOpacitySlider');
   if (slider) slider.value = 0.85;
   const label = document.getElementById('overlayOpacityVal');
