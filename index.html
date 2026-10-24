@@ -728,8 +728,7 @@
 
 <!-- 1. POPUP MODAL: MAP, TRACKER & OVERLAYS -->
 <div id="mapModal" class="modal">
-  <div id="mapContainer" style="position: relative; display: flex; flex-direction: column; height: 90vh; max-height: 90vh;">
-    
+  <div id="mapContainer">
     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">
       <h3 style="margin:0; font-size:15px; color:var(--primary);">🗺️ Field Map, Geofence & GPS Tracker</h3>
       <button type="button" onclick="closeSpatialMap()" class="btn-danger btn-small">✕ Close</button>
@@ -743,48 +742,51 @@
       </button>
     </div>
 
-    <!-- Map & Stationary Reticle Wrapper (Position Relative) -->
-    <div style="position: relative; width: 100%; flex-grow: 1; margin-top: 6px; overflow: hidden; border-radius: 6px; border: 1px solid #cbd5e1;">
+    <!-- IN-LINE OVERLAY CALIBRATION & OPACITY PANEL (GUARANTEED VISIBLE) -->
+    <div id="overlayNudgeControls" style="display:none; margin: 6px 0; background: #ffffff; border: 2px solid #0284c7; border-radius: 8px; padding: 8px 12px; box-shadow: 0 3px 10px rgba(0,0,0,0.15); font-family: sans-serif;">
       
-      <!-- FLOATING OVERLAY CALIBRATION & OPACITY HUD (Z-INDEX 1001) -->
-      <div id="overlayNudgeControls" style="display:none; position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:1001; background:rgba(255,255,255,0.96); border:1px solid #94a3b8; border-radius:8px; padding:8px 12px; box-shadow:0 4px 15px rgba(0,0,0,0.3); font-family:sans-serif; width:92%; max-width:440px; pointer-events:auto;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <span style="font-weight:bold; font-size:12px; color:#1e293b;">🎯 Sheet Alignment & Opacity</span>
-          <span id="nudgeOffsetDisplay" style="color:#0284c7; font-family:monospace; font-size:11px; font-weight:bold;">ΔN: 0m | ΔE: 0m</span>
-        </div>
-
-        <!-- Opacity Slider -->
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #e2e8f0;">
-          <span style="font-size:11px; color:#475569; min-width:55px;">Opacity:</span>
-          <input id="overlayOpacitySlider" type="range" min="0" max="1" step="0.05" value="0.85" style="flex:1; cursor:pointer;" oninput="changeOverlayOpacity(this.value)">
-          <span id="overlayOpacityVal" style="font-size:11px; font-weight:bold; min-width:35px; text-align:right;">85%</span>
-        </div>
-
-        <!-- Nudge Stepper and Direction Buttons -->
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
-          <div style="display:flex; align-items:center; gap:4px;">
-            <span style="font-size:11px; color:#475569;">Step:</span>
-            <select id="nudgeStep" style="padding:2px 4px; font-size:11px; border-radius:4px; border:1px solid #cbd5e1;">
-              <option value="0.0001">~10m (Fine)</option>
-              <option value="0.00025">~25m</option>
-              <option value="0.0005" selected>~50m</option>
-              <option value="0.001">~100m (Coarse)</option>
-              <option value="0.0025">~250m (Legend Trim)</option>
-            </select>
-          </div>
-
-          <!-- Directional Pad -->
-          <div style="display:flex; gap:3px;">
-            <button type="button" onclick="nudgeOverlay(0, 1)" style="padding:4px 8px; font-size:11px; font-weight:bold; border-radius:4px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;">⬆ N</button>
-            <button type="button" onclick="nudgeOverlay(0, -1)" style="padding:4px 8px; font-size:11px; font-weight:bold; border-radius:4px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;">⬇ S</button>
-            <button type="button" onclick="nudgeOverlay(-1, 0)" style="padding:4px 8px; font-size:11px; font-weight:bold; border-radius:4px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;">⬅ W</button>
-            <button type="button" onclick="nudgeOverlay(1, 0)" style="padding:4px 8px; font-size:11px; font-weight:bold; border-radius:4px; background:#f1f5f9; border:1px solid #cbd5e1; cursor:pointer;">➡ E</button>
-          </div>
-
-          <button type="button" onclick="resetOverlayNudge()" style="padding:4px 8px; font-size:11px; background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; border-radius:4px; cursor:pointer;">Reset</button>
-        </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <span style="font-weight:bold; font-size:12px; color:#1e293b;">🎯 Sheet Alignment & Opacity</span>
+        <span id="nudgeOffsetDisplay" style="color:#0284c7; font-family:monospace; font-size:12px; font-weight:bold;">ΔN: 0m | ΔE: 0m</span>
       </div>
 
+      <!-- Opacity Slider -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #e2e8f0;">
+        <span style="font-size:11px; color:#475569; min-width:55px;">Opacity:</span>
+        <input id="overlayOpacitySlider" type="range" min="0" max="1" step="0.05" value="0.85" style="flex:1; cursor:pointer;" oninput="changeOverlayOpacity(this.value)">
+        <span id="overlayOpacityVal" style="font-size:11px; font-weight:bold; min-width:35px; text-align:right;">85%</span>
+      </div>
+
+      <!-- Nudge Stepper and Direction Buttons -->
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:4px;">
+          <span style="font-size:11px; color:#475569;">Step:</span>
+          <select id="nudgeStep" style="padding:3px 6px; font-size:11px; border-radius:4px; border:1px solid #cbd5e1;">
+            <option value="0.0001">~10m (Fine)</option>
+            <option value="0.00025">~25m</option>
+            <option value="0.0005" selected>~50m</option>
+            <option value="0.001">~100m (Coarse)</option>
+            <option value="0.0025">~250m (Legend Trim)</option>
+          </select>
+        </div>
+
+        <!-- Directional Pad -->
+        <div style="display:flex; gap:4px;">
+          <button type="button" onclick="nudgeOverlay(0, 1)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">⬆ N</button>
+          <button type="button" onclick="nudgeOverlay(0, -1)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">⬇ S</button>
+          <button type="button" onclick="nudgeOverlay(-1, 0)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">⬅ W</button>
+          <button type="button" onclick="nudgeOverlay(1, 0)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">➡ E</button>
+        </div>
+
+        <div style="display:flex; gap:4px;">
+          <button type="button" onclick="resetOverlayNudge()" class="btn-warn btn-small" style="padding:4px 8px;">Reset</button>
+          <button type="button" onclick="document.getElementById('overlayNudgeControls').style.display='none'" class="btn-sec btn-small" style="padding:4px 8px;">Hide</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Map & Stationary Reticle Wrapper -->
+    <div style="position: relative; width: 100%; flex-grow: 1; margin-top: 6px;">
       <!-- Optical Center Crosshair -->
       <div id="centerCrosshair" class="center-crosshair">
         <svg width="34" height="34" viewBox="0 0 34 34">
@@ -798,10 +800,10 @@
       </div>
 
       <!-- Leaflet Map Canvas -->
-      <div id="map" style="width: 100%; height: 100%;"></div>
+      <div id="map" style="width: 100%; height: 100%; min-height: 380px;"></div>
     </div>
 
-    <!-- Live GPS Tracking Console & Multi-Format Exporters -->
+    <!-- Live GPS Tracking Console -->
     <div style="display: flex; gap: 8px; align-items: center; justify-content: space-between; background: #ebf5fb; padding: 6px 10px; border-radius: 6px; margin-top: 8px; flex-wrap: wrap;">
       <div style="display: flex; gap: 6px; align-items: center;">
         <span style="font-weight: bold; font-size: 12px; color: #2980b9;">🛰️ GPS Track:</span>
@@ -817,10 +819,11 @@
       </div>
     </div>
 
-    <!-- Overlays Accordion -->
-    <details style="margin-top:6px; background:#f8f9f9; padding:6px 10px; border-radius:6px; border:1px solid var(--border);">
+    <!-- Overlays Accordion with Direct Nudge Toggle Button -->
+    <details open style="margin-top:6px; background:#f8f9f9; padding:6px 10px; border-radius:6px; border:1px solid var(--border);">
       <summary style="font-weight:bold; font-size:12px; cursor:pointer; color:var(--primary);">📁 Overlays & Geofence Boundary</summary>
-      
+
+      <!-- Offline GeoPDF Loader -->
       <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
         <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px; color:var(--primary);">
           📄 Geospatial PDF (.pdf):
@@ -828,11 +831,13 @@
         <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
           <input type="file" id="geopdfFileInput" accept="application/pdf" style="font-size:11px; max-width: 190px;">
           <button type="button" id="renderPdfBtn" onclick="loadGeoPDFOverlay()" class="btn-small btn-ok">Render GeoPDF</button>
+          <button type="button" onclick="toggleNudgeControls()" class="btn-small" style="background:#0284c7; color:#fff;">🎯 Nudge & Opacity</button>
           <button type="button" onclick="removeGeoPDFOverlay()" class="btn-small btn-danger">Unload</button>
           <span id="pdfLoadingStatus" style="font-size:11px; color:#e67e22; font-weight:bold;"></span>
         </div>
       </div>
       
+      <!-- Offline GeoTIFF Loader -->
       <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
         <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px;">GeoTIFF Map (.tif/.tiff):</label>
         <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
@@ -842,6 +847,7 @@
         </div>
       </div>
 
+      <!-- KML Vector Overlay -->
       <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd;">
         <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px;">KML Vector Overlay (.kml):</label>
         <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
@@ -851,6 +857,7 @@
         </div>
       </div>
 
+      <!-- Scanned Raster Map Image (2-Corner Calibration) -->
       <div style="margin-top: 6px;">
         <label style="font-weight:bold; font-size:11px; display:block; margin-bottom:3px;">Scanned Map (Image + Bounding Box):</label>
         <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
