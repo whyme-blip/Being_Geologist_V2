@@ -742,49 +742,52 @@
       </button>
     </div>
 
-    <!-- IN-LINE OVERLAY CALIBRATION & OPACITY PANEL (GUARANTEED VISIBLE) -->
-    <div id="overlayNudgeControls" style="display:none; margin: 6px 0; background: #ffffff; border: 2px solid #0284c7; border-radius: 8px; padding: 8px 12px; box-shadow: 0 3px 10px rgba(0,0,0,0.15); font-family: sans-serif;">
-      
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <span style="font-weight:bold; font-size:12px; color:#1e293b;">🎯 Sheet Alignment & Opacity</span>
-        <span id="nudgeOffsetDisplay" style="color:#0284c7; font-family:monospace; font-size:12px; font-weight:bold;">ΔN: 0m | ΔE: 0m</span>
-      </div>
+    <!-- DRAGGABLE OVERLAY CALIBRATION & OPACITY HUD (TOUCH & MOUSE ENABLED) -->
+<div id="overlayNudgeControls" style="display:none; position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:1002; background:rgba(255,255,255,0.96); border:2px solid #0284c7; border-radius:8px; padding:8px 12px; box-shadow:0 6px 20px rgba(0,0,0,0.3); font-family:sans-serif; width:92%; max-width:440px; pointer-events:auto; touch-action:none;">
+  
+  <!-- Draggable Header Handle -->
+  <div id="nudgeDragHandle" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; cursor:move; user-select:none; padding-bottom:4px; border-bottom:1px dashed #cbd5e1;">
+    <span style="font-weight:bold; font-size:12px; color:#1e293b; display:flex; align-items:center; gap:4px;">
+      ⠿ 🎯 Sheet Alignment & Opacity <small style="font-size:10px; color:#64748b; font-weight:normal;">(Drag to move)</small>
+    </span>
+    <span id="nudgeOffsetDisplay" style="color:#0284c7; font-family:monospace; font-size:12px; font-weight:bold;">ΔN: 0m | ΔE: 0m</span>
+  </div>
 
-      <!-- Opacity Slider -->
-      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #e2e8f0;">
-        <span style="font-size:11px; color:#475569; min-width:55px;">Opacity:</span>
-        <input id="overlayOpacitySlider" type="range" min="0" max="1" step="0.05" value="0.85" style="flex:1; cursor:pointer;" oninput="changeOverlayOpacity(this.value)">
-        <span id="overlayOpacityVal" style="font-size:11px; font-weight:bold; min-width:35px; text-align:right;">85%</span>
-      </div>
+  <!-- Opacity Slider -->
+  <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #e2e8f0;">
+    <span style="font-size:11px; color:#475569; min-width:55px;">Opacity:</span>
+    <input id="overlayOpacitySlider" type="range" min="0" max="1" step="0.05" value="0.85" style="flex:1; cursor:pointer;" oninput="changeOverlayOpacity(this.value)">
+    <span id="overlayOpacityVal" style="font-size:11px; font-weight:bold; min-width:35px; text-align:right;">85%</span>
+  </div>
 
-      <!-- Nudge Stepper and Direction Buttons -->
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
-        <div style="display:flex; align-items:center; gap:4px;">
-          <span style="font-size:11px; color:#475569;">Step:</span>
-          <select id="nudgeStep" style="padding:3px 6px; font-size:11px; border-radius:4px; border:1px solid #cbd5e1;">
-            <option value="0.0001">~10m (Fine)</option>
-            <option value="0.00025">~25m</option>
-            <option value="0.0005" selected>~50m</option>
-            <option value="0.001">~100m (Coarse)</option>
-            <option value="0.0025">~250m (Legend Trim)</option>
-          </select>
-        </div>
-
-        <!-- Directional Pad -->
-        <div style="display:flex; gap:4px;">
-          <button type="button" onclick="nudgeOverlay(0, 1)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">⬆ N</button>
-          <button type="button" onclick="nudgeOverlay(0, -1)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">⬇ S</button>
-          <button type="button" onclick="nudgeOverlay(-1, 0)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">⬅ W</button>
-          <button type="button" onclick="nudgeOverlay(1, 0)" class="btn-sec btn-small" style="padding:4px 9px; font-weight:bold;">➡ E</button>
-        </div>
-
-        <div style="display:flex; gap:4px;">
-          <button type="button" onclick="resetOverlayNudge()" class="btn-warn btn-small" style="padding:4px 8px;">Reset</button>
-          <button type="button" onclick="document.getElementById('overlayNudgeControls').style.display='none'" class="btn-sec btn-small" style="padding:4px 8px;">Hide</button>
-        </div>
-      </div>
+  <!-- Nudge Stepper and Direction Buttons -->
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
+    <div style="display:flex; align-items:center; gap:4px;">
+      <span style="font-size:11px; color:#475569;">Step:</span>
+      <select id="nudgeStep" style="padding:4px 6px; font-size:11px; border-radius:4px; border:1px solid #cbd5e1; background:#fff; font-weight:bold;">
+        <option value="0.0001">~10m (Fine)</option>
+        <option value="0.00025">~25m</option>
+        <option value="0.0005" selected>~50m</option>
+        <option value="0.001">~100m (Coarse)</option>
+        <option value="0.0025">~250m (Legend Trim)</option>
+      </select>
     </div>
 
+    <!-- Directional Pad (High Contrast Blue) -->
+    <div style="display:flex; gap:4px;">
+      <button type="button" onclick="nudgeOverlay(0, 1)" style="padding:5px 10px; font-size:12px; font-weight:bold; color:#ffffff; background:#1e40af; border:1px solid #1e3a8a; border-radius:4px; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2);">⬆ N</button>
+      <button type="button" onclick="nudgeOverlay(0, -1)" style="padding:5px 10px; font-size:12px; font-weight:bold; color:#ffffff; background:#1e40af; border:1px solid #1e3a8a; border-radius:4px; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2);">⬇ S</button>
+      <button type="button" onclick="nudgeOverlay(-1, 0)" style="padding:5px 10px; font-size:12px; font-weight:bold; color:#ffffff; background:#1e40af; border:1px solid #1e3a8a; border-radius:4px; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2);">⬅ W</button>
+      <button type="button" onclick="nudgeOverlay(1, 0)" style="padding:5px 10px; font-size:12px; font-weight:bold; color:#ffffff; background:#1e40af; border:1px solid #1e3a8a; border-radius:4px; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2);">➡ E</button>
+    </div>
+
+    <div style="display:flex; gap:4px;">
+      <button type="button" onclick="resetOverlayNudge()" style="padding:4px 8px; font-size:11px; background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; border-radius:4px; cursor:pointer; font-weight:bold;">Reset</button>
+      <button type="button" onclick="document.getElementById('overlayNudgeControls').style.display='none'" style="padding:4px 8px; font-size:11px; background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;">Hide</button>
+    </div>
+  </div>
+</div>
+    
     <!-- Map & Stationary Reticle Wrapper -->
     <div style="position: relative; width: 100%; flex-grow: 1; margin-top: 6px;">
       <!-- Optical Center Crosshair -->
