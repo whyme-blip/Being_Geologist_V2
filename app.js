@@ -2031,6 +2031,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Auto-resize Leaflet map when Overlays accordion expands or collapses
+  const detailsEl = document.querySelector('#mapModal details');
+  if (detailsEl) {
+    detailsEl.addEventListener('toggle', () => {
+      if (mapInstance) {
+        setTimeout(() => mapInstance.invalidateSize(), 150);
+      }
+    });
+  }
+
   // Initialize UI State
   renderProjectDropdown();
   updateLocationID();
