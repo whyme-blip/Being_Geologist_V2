@@ -483,37 +483,55 @@
         </select>
       </div>
 
-      <div id="customStructureDiv" class="form-group hidden">
+   <div id="customStructureDiv" class="form-group hidden">
         <label>Custom Structure Name</label>
         <input id="customStructure" placeholder="Enter custom type">
       </div>
 
+      <!-- PLANAR FIELDS (STRIKE / DIP) -->
       <div id="planarFields" class="compact-row" style="grid-column: span 2; display: grid;">
-        <div class="form-group">
-          <label>Strike (RHR) (°)</label>
+        <div class="form-group" style="position: relative;">
+          <label for="strike">Strike (RHR) (°)</label>
           <input id="strike" type="number" min="0" max="360" placeholder="045">
+          <span id="strikeError" style="display:none; color:#e74c3c; font-size:11px; font-weight:bold; margin-top:2px;">
+            ⚠️ 0° to 360° allowed only for Strike
+          </span>
         </div>
-        <div class="form-group">
+        <div class="form-group" style="position: relative;">
           <label>Dip & Dip Direction</label>
           <div class="compact-row">
-            <input id="dip" type="number" min="0" max="90" placeholder="35">
-            <input id="dipdir" readonly placeholder="Auto DD">
+            <div style="flex: 1; position: relative;">
+              <input id="dip" type="number" min="0" max="90" placeholder="35">
+              <span id="dipError" style="display:none; color:#e74c3c; font-size:11px; font-weight:bold; margin-top:2px;">
+                ⚠️ 0° to 90° allowed only for Dip
+              </span>
+            </div>
+            <div style="flex: 1;">
+              <input id="dipdir" readonly placeholder="Auto DD" style="background:#eaeded; font-weight:bold; color:var(--primary);">
+            </div>
           </div>
         </div>
       </div>
 
-      <div id="linearFields" class="compact-row hidden" style="grid-column: span 2;">
-        <div class="form-group">
-          <label>Trend (°)</label>
+      <!-- LINEAR FIELDS (TREND / PLUNGE) -->
+      <div id="linearFields" class="compact-row hidden" style="grid-column: span 2; display: grid;">
+        <div class="form-group" style="position: relative;">
+          <label for="trend">Trend (°)</label>
           <input id="trend" type="number" min="0" max="360" placeholder="225">
+          <span id="trendError" style="display:none; color:#e74c3c; font-size:11px; font-weight:bold; margin-top:2px;">
+            ⚠️ 0° to 360° allowed only for Trend
+          </span>
         </div>
-        <div class="form-group">
-          <label>Plunge (°)</label>
+        <div class="form-group" style="position: relative;">
+          <label for="plunge">Plunge (°)</label>
           <input id="plunge" type="number" min="0" max="90" placeholder="25">
+          <span id="plungeError" style="display:none; color:#e74c3c; font-size:11px; font-weight:bold; margin-top:2px;">
+            ⚠️ 0° to 90° allowed only for Plunge
+          </span>
         </div>
       </div>
     </div>
-
+      
     <div class="grid-layout">
       <div class="form-group">
         <label>Movement Sense</label>
