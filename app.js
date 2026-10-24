@@ -1314,6 +1314,70 @@ function resetOverlayNudge() {
   localStorage.removeItem(`overlayOffset_${activeProjectId}`);
   applyNudgedBounds();
 }
+// ==========================================
+// DRAGGABLE HUD HANDLER (MOUSE & TOUCH)
+// ==========================================
+function makeNudgeHudDraggable() {
+  const hud = document.getElementById('overlayNudgeControls');
+  const handle = document.getElementById('nudgeDragHandle');
+  if (!hud || !handle) return;
+
+  let isDragging = false;
+  let startX, startY, initialLeft, initialTop;
+
+  function onPointerDown(e) {
+    // Only drag when interacting with the handle or title area, not child buttons/sliders
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') return;
+
+    isDragging = true;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    startX = clientX;
+    startY = clientY;
+
+    const rect = hud.getBoundingClientRect();
+    const parentRect = hud.offsetParent ? hud.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+
+    initialLeft = rect.left - parentRect.left;
+    initialTop = rect.top - parentRect.top;
+
+    // Remove translateX centering once dragged
+    hud.style.transform = 'none';
+    hud.style.left = `${initialLeft}px`;
+    hud.style.top = `${initialTop}px`;
+
+    document.addEventListener('mousemove', onPointerMove);
+    document.addEventListener('mouseup', onPointerUp);
+    document.addEventListener('touchmove', onPointerMove, { passive: false });
+    document.addEventListener('touchend', onPointerUp);
+  }
+
+  function onPointerMove(e) {
+    if (!isDragging) return;
+    if (e.cancelable) e.preventDefault(); // Prevent accidental map panning during HUD drag
+
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    const dx = clientX - startX;
+    const dy = clientY - startY;
+
+    hud.style.left = `${initialLeft + dx}px`;
+    hud.style.top = `${initialTop + dy}px`;
+  }
+
+  function onPointerUp() {
+    isDragging = false;
+    document.removeEventListener('mousemove', onPointerMove);
+    document.removeEventListener('mouseup', onPointerUp);
+    document.removeEventListener('touchmove', onPointerMove);
+    document.removeEventListener('touchend', onPointerUp);
+  }
+
+  handle.addEventListener('mousedown', onPointerDown);
+  handle.addEventListener('touchstart', onPointerDown, { passive: true });
+}
 
 async function loadGeoPDFOverlay() {
   const fileInput = document.getElementById('geopdfFileInput');
@@ -1870,11 +1934,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const dateEl = document.getElementById('date');
   if (dateEl && !dateEl.value) dateEl.valueAsDate = new Date();
 
+  // Attach live preview updates to all registered field IDs
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', updatePreview);
   });
 
+  // Toggle planar vs linear fields based on structure type
   const typeEl = document.getElementById('type');
   if (typeEl) {
     typeEl.addEventListener('change', function () {
@@ -1965,11 +2031,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Initialize UI State
   renderProjectDropdown();
   updateLocationID();
   toggleSampleState();
   render();
   updatePreview();
+
+  // Initialize Drag & Touch functionality on the Nudge HUD
+  if (typeof makeNudgeHudDraggable === 'function') {
+    makeNudgeHudDraggable();
+  }
 
   // Automatic GPS Pre-warming loop
   if (typeof getGPS === 'function') {
