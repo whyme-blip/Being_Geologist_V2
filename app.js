@@ -1130,51 +1130,62 @@ async function extractBoundsFromPageText(page) {
 }
 
 function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
-  const bytes = new Uint8Array(rawBuffer);
-  const textDecoder = new TextDecoder('latin1');
+  try {
+    const bytes = new Uint8Array(rawBuffer);
+    const textDecoder = new TextDecoder('latin1');
 
-  const fullText = textDecoder.decode(bytes);
-  const rawGpts = scanTextForGpts(fullText);
-  if (rawGpts) return rawGpts;
+    // 1. Check uncompressed raw text
+    const fullText = textDecoder.decode(bytes);
+    const rawGpts = scanTextForGpts(fullText);
+    if (rawGpts) return rawGpts;
 
-  if (typeof pako !== 'undefined') {
-    let pos = 0;
-    while (pos < bytes.length) {
-      let streamStart = -1;
-      for (let i = pos; i < bytes.length - 6; i++) {
-        if (bytes[i] === 115 && bytes[i+1] === 116 && bytes[i+2] === 114 && bytes[i+3] === 101 && bytes[i+4] === 97 && bytes[i+5] === 109) {
-          streamStart = i + 6;
-          if (bytes[streamStart] === 13) streamStart++;
-          if (bytes[streamStart] === 10) streamStart++;
-          break;
+    // 2. Scan and decompress FlateDecode streams using Pako
+    if (typeof pako !== 'undefined') {
+      let pos = 0;
+      const maxScan = Math.min(bytes.length, 12000000); // 12MB limit for mobile
+
+      while (pos < maxScan - 10) {
+        let streamStart = -1;
+        for (let i = pos; i < maxScan - 6; i++) {
+          if (bytes[i] === 115 && bytes[i+1] === 116 && bytes[i+2] === 114 && bytes[i+3] === 101 && bytes[i+4] === 97 && bytes[i+5] === 109) { // 'stream'
+            streamStart = i + 6;
+            if (bytes[streamStart] === 13) streamStart++;
+            if (bytes[streamStart] === 10) streamStart++;
+            break;
+          }
         }
-      }
 
-      if (streamStart === -1) break;
+        if (streamStart === -1) break;
 
-      let streamEnd = -1;
-      for (let i = streamStart; i < Math.min(bytes.length - 9, streamStart + 2000000); i++) {
-        if (bytes[i] === 101 && bytes[i+1] === 110 && bytes[i+2] === 100 && bytes[i+3] === 115) {
-          streamEnd = i;
-          break;
+        let streamEnd = -1;
+        for (let i = streamStart; i < Math.min(maxScan - 9, streamStart + 1500000); i++) {
+          if (bytes[i] === 101 && bytes[i+1] === 110 && bytes[i+2] === 100 && bytes[i+3] === 115) { // 'ends'
+            streamEnd = i;
+            break;
+          }
         }
+
+        if (streamEnd === -1) {
+          pos = streamStart + 1;
+          continue;
+        }
+
+        // CRITICAL: bytes.slice() makes an independent copy, preventing detached memory conflicts
+        const streamChunk = bytes.slice(streamStart, streamEnd);
+        try {
+          const inflated = pako.inflate(streamChunk);
+          const decompressedText = textDecoder.decode(inflated);
+          const bounds = scanTextForGpts(decompressedText);
+          if (bounds) return bounds;
+        } catch (err) {
+          // Stream is not zlib or is an image/font stream — continue
+        }
+
+        pos = streamEnd + 9;
       }
-
-      if (streamEnd === -1) {
-        pos = streamStart + 1;
-        continue;
-      }
-
-      const streamChunk = bytes.subarray(streamStart, streamEnd);
-      try {
-        const inflated = pako.inflate(streamChunk);
-        const decompressedText = textDecoder.decode(inflated);
-        const bounds = scanTextForGpts(decompressedText);
-        if (bounds) return bounds;
-      } catch (err) {}
-
-      pos = streamEnd + 9;
     }
+  } catch (err) {
+    console.warn("Binary stream scan skipped:", err);
   }
 
   return null;
@@ -1292,33 +1303,30 @@ async function loadGeoPDFOverlay() {
     return;
   }
 
+  // Use Blob URL for PDF.js (eliminates the detached ArrayBuffer crash completely)
+  const pdfBlobUrl = URL.createObjectURL(file);
+
   try {
     if (statusEl) statusEl.textContent = 'Reading GeoPDF...';
     if (renderBtn) renderBtn.disabled = true;
 
-    // 1. Read buffer from file
+    // 1. Read buffer strictly for Pako stream extraction in main thread
     const rawBuffer = await file.arrayBuffer();
 
-    // 2. Clone buffer so PDF.js Web Worker transfer doesn't detach our scan copy
-    const bufferForPako = rawBuffer.slice(0);
-    const bufferForPdfJs = rawBuffer.slice(0);
-
     if (statusEl) statusEl.textContent = 'Decompressing /GPTS tags...';
-    
-    // First, scan with Pako using our safe clone
-    let bounds = extractGeoPdfCoordinatesFromBinary(bufferForPako);
+    let bounds = extractGeoPdfCoordinatesFromBinary(rawBuffer);
 
-    // 3. Load PDF.js with its own dedicated buffer copy
-    const loadingTask = pdfjsLib.getDocument({ data: bufferForPdfJs });
+    // 2. Load PDF.js via Blob URL so its Web Worker never touches rawBuffer
+    const loadingTask = pdfjsLib.getDocument(pdfBlobUrl);
     const pdfDoc = await loadingTask.promise;
     const page = await pdfDoc.getPage(1);
 
-    // If Pako didn't find /GPTS tags, scan the decompressed text layer for graticules
+    // 3. Fallback: text layer scan if /GPTS dictionary was not present
     if (!bounds) {
       bounds = await extractBoundsFromPageText(page);
     }
 
-    // Fallback prompt only if neither method found coordinates
+    // 4. Fallback: manual coordinate prompt if both scans found nothing
     if (!bounds) {
       const promptCoords = prompt(
         "Notice: Geospatial tags not automatically detected.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal/Nerwa), paste:\n30.833333, 77.516667, 30.983333, 77.750000"
@@ -1334,13 +1342,14 @@ async function loadGeoPDFOverlay() {
     if (!bounds) {
       if (statusEl) statusEl.textContent = '';
       if (renderBtn) renderBtn.disabled = false;
+      URL.revokeObjectURL(pdfBlobUrl);
       alert("Could not extract geographic bounds.");
       return;
     }
 
     if (statusEl) statusEl.textContent = 'Rasterizing Page 1...';
 
-    // 4. Render Page 1 to Off-Screen Canvas
+    // 5. Render Page 1
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1352,7 +1361,10 @@ async function loadGeoPDFOverlay() {
       viewport: viewport
     }).promise;
 
-    // 5. Attach canvas as Leaflet ImageOverlay
+    // Release blob URL from memory
+    URL.revokeObjectURL(pdfBlobUrl);
+
+    // 6. Add as Leaflet image overlay
     canvas.toBlob(blob => {
       removeGeoPDFOverlay(false);
 
@@ -1371,6 +1383,7 @@ async function loadGeoPDFOverlay() {
     }, 'image/png');
 
   } catch (err) {
+    URL.revokeObjectURL(pdfBlobUrl);
     if (statusEl) statusEl.textContent = '';
     if (renderBtn) renderBtn.disabled = false;
     alert("GeoPDF Load Error: " + err.message);
