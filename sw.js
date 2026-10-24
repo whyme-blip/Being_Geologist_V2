@@ -1,5 +1,5 @@
 // =========================================================
-// VERSION DEFINITION (Bumped to v2.1 for GeoPDF & GeoTIFF)
+// VERSION DEFINITION (Bumped to v2.1 for Pako & GeoPDF Nudge)
 // =========================================================
 const APP_VERSION = 'v2.1';
 const CACHE_NAME = `geologger-app-${APP_VERSION}`;
@@ -18,7 +18,7 @@ const STATIC_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
   'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-  // Zlib Decompression for compressed GeoPDF /GPTS streams
+  // Zlib Decompression for compressed GeoPDF /VP and /GPTS streams
   'https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js',
   // GeoPDF Engine (PDF.js + Worker)
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
@@ -29,7 +29,7 @@ const STATIC_ASSETS = [
   'https://unpkg.com/georaster-layer-for-leaflet'
 ];
 
-// 1. INSTALL: Pre-cache static shell & activate immediately
+// 1. INSTALL: Pre-cache static shell & force immediate activation
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
