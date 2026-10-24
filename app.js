@@ -19,9 +19,12 @@ let customOverlayLayer = null;
 let currentOverlayUrl = null;
 let currentGeoTiffLayer = null;
 
-// GeoPDF Layer Handles
+// GeoPDF Layer & Nudge State
 let currentGeoPdfLayer = null;
 let currentGeoPdfBlobUrl = null;
+let activeOverlayBounds = null;
+let overlayLatOffset = 0;
+let overlayLonOffset = 0;
 
 // Live GPS Blue Dot Handles
 let liveLocationMarker = null;
@@ -121,8 +124,35 @@ function createNewProject() {
 }
 
 // ==========================================
-// 4. CALCULATION & LIVE PREVIEW UTILITIES
+// 4. CALCULATION & VALIDATION UTILITIES
 // ==========================================
+function validateField(inputId, errorId, min, max) {
+  const el = document.getElementById(inputId);
+  const errEl = document.getElementById(errorId);
+  if (!el) return true;
+
+  const raw = el.value.trim();
+  if (raw === '') {
+    el.style.borderColor = '';
+    el.style.backgroundColor = '';
+    if (errEl) errEl.style.display = 'none';
+    return true;
+  }
+
+  const num = parseFloat(raw);
+  if (isNaN(num) || num < min || num > max) {
+    el.style.borderColor = '#e74c3c';
+    el.style.backgroundColor = '#fdebd0';
+    if (errEl) errEl.style.display = 'block';
+    return false;
+  } else {
+    el.style.borderColor = '';
+    el.style.backgroundColor = '';
+    if (errEl) errEl.style.display = 'none';
+    return true;
+  }
+}
+
 function handleLinTypeChange() {
   const select = document.getElementById('linType');
   const customDiv = document.getElementById('customLinTypeDiv');
@@ -195,7 +225,7 @@ function calculateLineationFromPitch() {
   const plungeInput = document.getElementById('linPlunge');
   if (!trendInput || !plungeInput) return;
 
-  if (isNaN(strike) || isNaN(dip) || isNaN(rake) || rake < 0 || rake > 90) {
+  if (isNaN(strike) || isNaN(dip) || isNaN(rake) || rake < 0 || rake > 90 || strike < 0 || strike > 360 || dip < 0 || dip > 90) {
     trendInput.value = '';
     plungeInput.value = '';
     updatePreview();
@@ -315,11 +345,7 @@ function getGPS() {
         handleGpsFailure(err);
       }
     },
-    {
-      enableHighAccuracy: true,
-      timeout: 8000,
-      maximumAge: 0
-    }
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
   );
 
   function handleGpsFailure(err) {
@@ -328,7 +354,7 @@ function getGPS() {
     if (accField) accField.value = 'Error';
 
     let msg = '';
-    if (err.code === 1) msg = "Permission Denied: Tap the site info padlock and enable 'Precise Location'.";
+    if (err.code === 1) msg = "Permission Denied: Tap the padlock icon and enable 'Precise Location'.";
     else if (err.code === 2) msg = "Position Unavailable: GPS satellites not locked.";
     else if (err.code === 3) msg = "GPS Timeout: Tap 'Sync GPS' again.";
     else msg = err.message || "Unknown GPS error.";
@@ -341,6 +367,16 @@ function getGPS() {
 // 6. RECORD LOGGING & MANAGEMENT
 // ==========================================
 function saveEntry() {
+  const isStrikeValid = validateField('strike', 'strikeError', 0, 360);
+  const isDipValid = validateField('dip', 'dipError', 0, 90);
+  const isTrendValid = validateField('trend', 'trendError', 0, 360);
+  const isPlungeValid = validateField('plunge', 'plungeError', 0, 90);
+
+  if (!isStrikeValid || !isDipValid || !isTrendValid || !isPlungeValid) {
+    alert("Cannot Save Record!\n\nPlease correct the highlighted errors:\n• Strike & Trend must be between 0° and 360°\n• Dip & Plunge must be between 0° and 90°");
+    return;
+  }
+
   const r = {
     id: Date.now(),
     projectId: activeProjectId,
@@ -428,6 +464,18 @@ function clearForm(resetDate = true) {
     }
   });
 
+  ['strike', 'dip', 'trend', 'plunge'].forEach(f => {
+    const el = document.getElementById(f);
+    if (el) {
+      el.style.borderColor = '';
+      el.style.backgroundColor = '';
+    }
+  });
+  ['strikeError', 'dipError', 'trendError', 'plungeError'].forEach(errId => {
+    const errEl = document.getElementById(errId);
+    if (errEl) errEl.style.display = 'none';
+  });
+
   handleLinTypeChange();
 
   const takeSampleEl = document.getElementById('takeSample');
@@ -471,10 +519,10 @@ function render() {
   updateMapDisplay();
 }
 
-function toggleRecordSelection(id, isChecked) {
+function toggleRecordSelection(id, isSelected) {
   const rec = records.find(r => r.id === id);
   if (rec) {
-    rec.selectedForDelete = isChecked;
+    rec.selectedForDelete = isSelected;
     persist();
   }
 }
@@ -970,7 +1018,6 @@ function exportTrackGeoJSON() {
 
 // Helper: Convert UTM/projected meters or reverse lat/lon to WGS84 [lat, lon]
 function projectToWGS84(x, y, gcsStr) {
-  // If coordinates are already in decimal degrees
   if (Math.abs(y) <= 90 && Math.abs(x) <= 180) {
     return [y, x];
   }
@@ -978,7 +1025,6 @@ function projectToWGS84(x, y, gcsStr) {
     return [x, y];
   }
 
-  // Detect UTM Zone from GCS string or default to regional Zone 43N / 44N
   let utmZone = 43;
   const zoneMatch = gcsStr ? gcsStr.match(/UTM\s*zone\s*(\d+)/i) : null;
   if (zoneMatch && zoneMatch[1]) {
@@ -1018,29 +1064,86 @@ function processGptsArray(pts, gcsContext) {
   ];
 }
 
-// Scans binary buffer, inflates zlib streams, and parses /GPTS and /BBox dictionaries
+function parseDmsStringToDecimal(str) {
+  if (!str) return null;
+  const clean = str.replace(/[–—]/g, '-').trim();
+  const match = clean.match(/(\d{1,3})[°\s-]+(?:(\d{1,2})['′\s]*)?(?:(\d{1,2}(?:\.\d+)?)["″\s]*)?([NSEW])?/i);
+  if (!match) return null;
+
+  const deg = parseFloat(match[1]);
+  const min = match[2] ? parseFloat(match[2]) : 0;
+  const sec = match[3] ? parseFloat(match[3]) : 0;
+  let hemi = match[4] ? match[4].toUpperCase() : '';
+
+  if (!hemi) {
+    if (deg >= 25 && deg <= 38) hemi = 'N';
+    else if (deg >= 70 && deg <= 85) hemi = 'E';
+  }
+
+  let dd = deg + (min / 60) + (sec / 3600);
+  if (hemi === 'S' || hemi === 'W') dd = -dd;
+  return dd;
+}
+
+async function extractBoundsFromPageText(page) {
+  try {
+    const textContent = await page.getTextContent();
+    const lats = [];
+    const lons = [];
+
+    textContent.items.forEach(item => {
+      const s = item.str.trim();
+      if (!s || s.length < 3) return;
+
+      if ((/[NS]/i.test(s) && /\d{2}[°\s-]/.test(s)) || /^3[01][°\s-]\d{2}/.test(s)) {
+        const lat = parseDmsStringToDecimal(s);
+        if (lat !== null && lat >= 30.0 && lat <= 32.5) {
+          lats.push(lat);
+        }
+      }
+
+      if ((/[EW]/i.test(s) && /\d{2,3}[°\s-]/.test(s)) || /^7[678][°\s-]\d{2}/.test(s)) {
+        const lon = parseDmsStringToDecimal(s);
+        if (lon !== null && lon >= 76.5 && lon <= 78.8) {
+          lons.push(lon);
+        }
+      }
+    });
+
+    if (lats.length >= 2 && lons.length >= 2) {
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons);
+      const maxLon = Math.max(...lons);
+
+      if (maxLat > minLat && maxLon > minLon) {
+        return [
+          [minLat, minLon],
+          [maxLat, maxLon]
+        ];
+      }
+    }
+  } catch (e) {
+    console.warn("Text content parsing error:", e);
+  }
+  return null;
+}
+
 function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
   const bytes = new Uint8Array(rawBuffer);
   const textDecoder = new TextDecoder('latin1');
 
-  // 1. First scan uncompressed strings in raw file
   const fullText = textDecoder.decode(bytes);
   const rawGpts = scanTextForGpts(fullText);
   if (rawGpts) return rawGpts;
 
-  // 2. If uncompressed scan fails, decompress FlateDecode streams using Pako
   if (typeof pako !== 'undefined') {
-    const streamToken = [115, 116, 114, 101, 97, 109]; // 'stream'
-    const endstreamToken = [101, 110, 100, 115, 116, 114, 101, 97, 109]; // 'endstream'
-
     let pos = 0;
     while (pos < bytes.length) {
-      // Find start of stream
       let streamStart = -1;
       for (let i = pos; i < bytes.length - 6; i++) {
         if (bytes[i] === 115 && bytes[i+1] === 116 && bytes[i+2] === 114 && bytes[i+3] === 101 && bytes[i+4] === 97 && bytes[i+5] === 109) {
           streamStart = i + 6;
-          // Skip optional newline (\r, \n) after 'stream' keyword
           if (bytes[streamStart] === 13) streamStart++;
           if (bytes[streamStart] === 10) streamStart++;
           break;
@@ -1049,7 +1152,6 @@ function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
 
       if (streamStart === -1) break;
 
-      // Find end of stream
       let streamEnd = -1;
       for (let i = streamStart; i < Math.min(bytes.length - 9, streamStart + 2000000); i++) {
         if (bytes[i] === 101 && bytes[i+1] === 110 && bytes[i+2] === 100 && bytes[i+3] === 115) {
@@ -1063,16 +1165,13 @@ function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
         continue;
       }
 
-      // Slice stream data and attempt zlib inflate
       const streamChunk = bytes.subarray(streamStart, streamEnd);
       try {
         const inflated = pako.inflate(streamChunk);
         const decompressedText = textDecoder.decode(inflated);
         const bounds = scanTextForGpts(decompressedText);
         if (bounds) return bounds;
-      } catch (err) {
-        // Not a zlib compressed stream (image pixel stream, etc.) - continue scanning
-      }
+      } catch (err) {}
 
       pos = streamEnd + 9;
     }
@@ -1084,7 +1183,6 @@ function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
 function scanTextForGpts(text) {
   if (!text) return null;
 
-  // Pattern A: /GPTS [lat1 lon1 lat2 lon2 ...]
   const gptsRegex = /\/GPTS\s*\[\s*([0-9.,\s-]+)\s*\]/i;
   const m = text.match(gptsRegex);
   if (m && m[1]) {
@@ -1094,7 +1192,6 @@ function scanTextForGpts(text) {
     }
   }
 
-  // Pattern B: /BBox [xMin yMin xMax yMax]
   const bboxRegex = /\/BBox\s*\[\s*([0-9.,\s-]+)\s*\]/i;
   const bMatch = text.match(bboxRegex);
   if (bMatch && bMatch[1]) {
@@ -1110,6 +1207,70 @@ function scanTextForGpts(text) {
   }
 
   return null;
+}
+
+// ------------------------------------------
+// OVERLAY CALIBRATION & NUDGE CONTROLS
+// ------------------------------------------
+function showNudgeControls(bounds) {
+  activeOverlayBounds = [
+    [bounds[0][0], bounds[0][1]],
+    [bounds[1][0], bounds[1][1]]
+  ];
+
+  const savedOffset = JSON.parse(localStorage.getItem(`overlayOffset_${activeProjectId}`) || '{"lat":0,"lon":0}');
+  overlayLatOffset = savedOffset.lat || 0;
+  overlayLonOffset = savedOffset.lon || 0;
+
+  const nudgeBar = document.getElementById('overlayNudgeControls');
+  if (nudgeBar) nudgeBar.style.display = 'block';
+
+  applyNudgedBounds();
+}
+
+function nudgeOverlay(dirX, dirY) {
+  const step = parseFloat(document.getElementById('nudgeStep')?.value || '0.0005');
+
+  overlayLonOffset += dirX * step;
+  overlayLatOffset += dirY * step;
+
+  localStorage.setItem(`overlayOffset_${activeProjectId}`, JSON.stringify({
+    lat: overlayLatOffset,
+    lon: overlayLonOffset
+  }));
+
+  applyNudgedBounds();
+}
+
+function applyNudgedBounds() {
+  if (!activeOverlayBounds) return;
+
+  const nudgedBounds = [
+    [activeOverlayBounds[0][0] + overlayLatOffset, activeOverlayBounds[0][1] + overlayLonOffset],
+    [activeOverlayBounds[1][0] + overlayLatOffset, activeOverlayBounds[1][1] + overlayLonOffset]
+  ];
+
+  if (currentGeoPdfLayer && mapInstance) {
+    currentGeoPdfLayer.setBounds(nudgedBounds);
+  }
+
+  if (customOverlayLayer && mapInstance) {
+    customOverlayLayer.setBounds(nudgedBounds);
+  }
+
+  const metersN = Math.round(overlayLatOffset * 111139);
+  const metersE = Math.round(overlayLonOffset * (111139 * Math.cos(nudgedBounds[0][0] * Math.PI / 180)));
+  const display = document.getElementById('nudgeOffsetDisplay');
+  if (display) {
+    display.textContent = `ΔN: ${metersN > 0 ? '+' : ''}${metersN}m | ΔE: ${metersE > 0 ? '+' : ''}${metersE}m`;
+  }
+}
+
+function resetOverlayNudge() {
+  overlayLatOffset = 0;
+  overlayLonOffset = 0;
+  localStorage.removeItem(`overlayOffset_${activeProjectId}`);
+  applyNudgedBounds();
 }
 
 async function loadGeoPDFOverlay() {
@@ -1136,14 +1297,20 @@ async function loadGeoPDFOverlay() {
     if (renderBtn) renderBtn.disabled = true;
 
     const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdfDoc = await loadingTask.promise;
+    const page = await pdfDoc.getPage(1);
 
-    if (statusEl) statusEl.textContent = 'Decompressing /GPTS tags...';
+    if (statusEl) statusEl.textContent = 'Extracting spatial tags...';
     let bounds = extractGeoPdfCoordinatesFromBinary(arrayBuffer);
 
-    // Fallback prompt only if document contains no spatial dictionary
+    if (!bounds) {
+      bounds = await extractBoundsFromPageText(page);
+    }
+
     if (!bounds) {
       const promptCoords = prompt(
-        "Notice: Geospatial /GPTS tags not detected.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal/Nerwa), paste:\n30.833333, 77.516667, 30.983333, 77.750000"
+        "Notice: Geospatial tags not automatically detected.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal/Nerwa), paste:\n30.833333, 77.516667, 30.983333, 77.750000"
       );
       if (promptCoords) {
         const parts = promptCoords.split(/[\s,]+/).map(Number);
@@ -1162,11 +1329,6 @@ async function loadGeoPDFOverlay() {
 
     if (statusEl) statusEl.textContent = 'Rasterizing Page 1...';
 
-    // Render Page 1 to Off-Screen Canvas
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdfDoc = await loadingTask.promise;
-    const page = await pdfDoc.getPage(1);
-
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1178,7 +1340,6 @@ async function loadGeoPDFOverlay() {
       viewport: viewport
     }).promise;
 
-    // Attach canvas to Leaflet ImageOverlay
     canvas.toBlob(blob => {
       removeGeoPDFOverlay(false);
 
@@ -1189,6 +1350,7 @@ async function loadGeoPDFOverlay() {
       }).addTo(mapInstance);
 
       mapInstance.fitBounds(bounds);
+      showNudgeControls(bounds);
 
       if (statusEl) statusEl.textContent = 'Ready';
       if (renderBtn) renderBtn.disabled = false;
@@ -1215,6 +1377,8 @@ function removeGeoPDFOverlay(showAlert = true) {
   if (fileInput) fileInput.value = '';
   const statusEl = document.getElementById('pdfLoadingStatus');
   if (statusEl) statusEl.textContent = '';
+  const nudgeBar = document.getElementById('overlayNudgeControls');
+  if (nudgeBar) nudgeBar.style.display = 'none';
   if (showAlert) alert("GeoPDF map sheet removed.");
 }
 
@@ -1381,33 +1545,12 @@ function exportCSV() {
   }
 
   const headers = [
-    'Project_ID',
-    'Station_ID',
-    'Date',
-    'Latitude',
-    'Longitude',
-    'Altitude_m',
-    'GPS_Accuracy_m',
-    'Structure_Type',
-    'Strike',
-    'Dip',
-    'Dip_Direction',
-    'Trend',
-    'Plunge',
-    'Associated_Lineation_Type',
-    'Pitch_Rake',
-    'Pitch_Measured_From',
-    'Associated_Trend',
-    'Associated_Plunge',
-    'Sense_of_Movement',
-    'Lithology',
-    'Stratigraphic_Unit',
-    'Mineralization',
-    'Alteration',
-    'Sample_ID',
-    'Sample_Type',
-    'Photo_References',
-    'Remarks'
+    'Project_ID', 'Station_ID', 'Date', 'Latitude', 'Longitude', 'Altitude_m',
+    'GPS_Accuracy_m', 'Structure_Type', 'Strike', 'Dip', 'Dip_Direction',
+    'Trend', 'Plunge', 'Associated_Lineation_Type', 'Pitch_Rake', 'Pitch_Measured_From',
+    'Associated_Trend', 'Associated_Plunge', 'Sense_of_Movement', 'Lithology',
+    'Stratigraphic_Unit', 'Mineralization', 'Alteration', 'Sample_ID', 'Sample_Type',
+    'Photo_References', 'Remarks'
   ];
 
   const rows = projectRecords.map(r => {
@@ -1686,24 +1829,67 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Strike listener updates DD, regenerates end labels, and recalculates pitch
+  // Strike validation (0 to 360) & auto RHR Dip Direction
   const strikeEl = document.getElementById('strike');
   if (strikeEl) {
     strikeEl.addEventListener('input', function () {
-      const strike = parseInt(this.value, 10);
+      const isValid = validateField('strike', 'strikeError', 0, 360);
       const ddEl = document.getElementById('dipdir');
-      if (!isNaN(strike) && ddEl) {
-        const dd = (strike + 90) % 360;
-        ddEl.value = `${pad3(dd)}° (${getQuadrant(dd)})`;
+
+      if (!isValid) {
+        if (ddEl) ddEl.value = 'Invalid Strike';
+        return;
       }
+
+      const strikeVal = parseInt(this.value, 10);
+      if (!isNaN(strikeVal) && ddEl) {
+        const dd = (strikeVal + 90) % 360;
+        ddEl.value = `${pad3(dd)}° (${getQuadrant(dd)})`;
+      } else if (ddEl) {
+        ddEl.value = '';
+      }
+
       updatePitchFromOptions();
       calculateLineationFromPitch();
+      updatePreview();
     });
   }
 
-  // Dip listener recalculates pitch
+  // Dip validation (0 to 90) & Pitch calculation
   const dipEl = document.getElementById('dip');
-  if (dipEl) dipEl.addEventListener('input', calculateLineationFromPitch);
+  if (dipEl) {
+    dipEl.addEventListener('input', function () {
+      const isValid = validateField('dip', 'dipError', 0, 90);
+      if (!isValid) {
+        const linTrend = document.getElementById('linTrend');
+        const linPlunge = document.getElementById('linPlunge');
+        if (linTrend) linTrend.value = '';
+        if (linPlunge) linPlunge.value = '';
+        return;
+      }
+
+      calculateLineationFromPitch();
+      updatePreview();
+    });
+  }
+
+  // Trend validation (0 to 360)
+  const trendEl = document.getElementById('trend');
+  if (trendEl) {
+    trendEl.addEventListener('input', function () {
+      validateField('trend', 'trendError', 0, 360);
+      updatePreview();
+    });
+  }
+
+  // Plunge validation (0 to 90)
+  const plungeEl = document.getElementById('plunge');
+  if (plungeEl) {
+    plungeEl.addEventListener('input', function () {
+      validateField('plunge', 'plungeError', 0, 90);
+      updatePreview();
+    });
+  }
 
   // Pitch/Rake listener
   const linRakeEl = document.getElementById('linRake');
