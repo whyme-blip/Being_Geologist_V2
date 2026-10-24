@@ -1296,18 +1296,29 @@ async function loadGeoPDFOverlay() {
     if (statusEl) statusEl.textContent = 'Reading GeoPDF...';
     if (renderBtn) renderBtn.disabled = true;
 
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    // 1. Read buffer from file
+    const rawBuffer = await file.arrayBuffer();
+
+    // 2. Clone buffer so PDF.js Web Worker transfer doesn't detach our scan copy
+    const bufferForPako = rawBuffer.slice(0);
+    const bufferForPdfJs = rawBuffer.slice(0);
+
+    if (statusEl) statusEl.textContent = 'Decompressing /GPTS tags...';
+    
+    // First, scan with Pako using our safe clone
+    let bounds = extractGeoPdfCoordinatesFromBinary(bufferForPako);
+
+    // 3. Load PDF.js with its own dedicated buffer copy
+    const loadingTask = pdfjsLib.getDocument({ data: bufferForPdfJs });
     const pdfDoc = await loadingTask.promise;
     const page = await pdfDoc.getPage(1);
 
-    if (statusEl) statusEl.textContent = 'Extracting spatial tags...';
-    let bounds = extractGeoPdfCoordinatesFromBinary(arrayBuffer);
-
+    // If Pako didn't find /GPTS tags, scan the decompressed text layer for graticules
     if (!bounds) {
       bounds = await extractBoundsFromPageText(page);
     }
 
+    // Fallback prompt only if neither method found coordinates
     if (!bounds) {
       const promptCoords = prompt(
         "Notice: Geospatial tags not automatically detected.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal/Nerwa), paste:\n30.833333, 77.516667, 30.983333, 77.750000"
@@ -1329,6 +1340,7 @@ async function loadGeoPDFOverlay() {
 
     if (statusEl) statusEl.textContent = 'Rasterizing Page 1...';
 
+    // 4. Render Page 1 to Off-Screen Canvas
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -1340,6 +1352,7 @@ async function loadGeoPDFOverlay() {
       viewport: viewport
     }).promise;
 
+    // 5. Attach canvas as Leaflet ImageOverlay
     canvas.toBlob(blob => {
       removeGeoPDFOverlay(false);
 
