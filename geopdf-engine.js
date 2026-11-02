@@ -1,6 +1,6 @@
 // =========================================================
 // GEOPDF-ENGINE.JS - OGC / ADOBE GEOSPATIAL PDF ENGINE
-// High-Precision Projection, Affine Warping & Calibration HUD
+// High-Precision Projection, Y-Inverted Affine & Rotated Quad Overlay
 // =========================================================
 
 // State Handles
@@ -9,6 +9,9 @@ let currentGeoPdfBlobUrl = null;
 let activeOverlayBounds = null;
 let overlayLatOffset = 0;
 let overlayLonOffset = 0;
+
+// Projected coordinates store for Rotated Image Overlay
+let currentQuadCorners = null; // { topleft, topright, bottomleft }
 
 // Helper: Convert UTM/projected meters or reverse lat/lon to WGS84 [lat, lon]
 function projectToWGS84(x, y, gcsStr) {
@@ -119,7 +122,9 @@ async function extractBoundsFromPageText(page) {
   return null;
 }
 
-// 2D Affine Least-Squares Solver
+// =========================================================
+// AFFINE MATRIX SOLVER (PDF Bottom-Left to Canvas Top-Left Inversion)
+// =========================================================
 function computeAffineTransform(points) {
   const n = points.length;
   if (n < 3) return null;
@@ -154,7 +159,7 @@ function computeAffineTransform(points) {
   const c = (sumLat - a * sumX - b * sumY) / n;
 
   const d = ((sumLonX * sumY2 - sumLonY * sumXY) * n - sumX * (sumLon * sumY2 - sumLonY * sumY) + sumY * (sumLon * sumXY - sumLonX * sumY)) / det;
-  const e = ((sumX2 * sumLonY - sumXY * sumLonX) * n - (sumX2 * sumLat - sumX * sumLatX) * sumY + sumX * (sumXY * sumLon - sumX * sumLonY)) / det;
+  const e = ((sumX2 * sumLonY - sumXY * sumLonX) * n - (sumX2 * sumLon - sumX * sumLonX) * sumY + sumX * (sumXY * sumLon - sumX * sumLonY)) / det;
   const f = ((sumLon - d * sumX - e * sumY)) / n;
 
   return {
@@ -165,6 +170,10 @@ function computeAffineTransform(points) {
   };
 }
 
+/**
+ * Maps PDF page points to Geographic World Coordinates
+ * Correctly accounts for PDF (y-up) vs Image (y-down) orientation.
+ */
 function calculatePageWorldBounds(mediaBox, bbox, gpts, gcsContext) {
   const pw0 = mediaBox[0], ph0 = mediaBox[1], pw1 = mediaBox[2], ph1 = mediaBox[3];
   const bx0 = bbox[0], by0 = bbox[1], bx1 = bbox[2], by1 = bbox[3];
@@ -175,6 +184,9 @@ function calculatePageWorldBounds(mediaBox, bbox, gpts, gcsContext) {
     wgsGpts.push({ lat: pt[0], lon: pt[1] });
   }
 
+  // PDF /GPTS sequence standard (OGC 08-139r1):
+  // 1: Lower-Left, 2: Lower-Right, 3: Upper-Right, 4: Upper-Left
+  // We map directly in PDF point space:
   const gcp = [
     { x: bx0, y: by0, lat: wgsGpts[0].lat, lon: wgsGpts[0].lon },
     { x: bx1, y: by0, lat: wgsGpts[1].lat, lon: wgsGpts[1].lon },
@@ -185,10 +197,11 @@ function calculatePageWorldBounds(mediaBox, bbox, gpts, gcsContext) {
   const affine = computeAffineTransform(gcp);
   if (!affine) return null;
 
-  const cBottomLeft  = affine.forward(pw0, ph0);
-  const cBottomRight = affine.forward(pw1, ph0);
-  const cTopRight    = affine.forward(pw1, ph1);
-  const cTopLeft     = affine.forward(pw0, ph1);
+  // Extrapolate the 4 outer corners of the physical PDF page (MediaBox)
+  const cBottomLeft  = affine.forward(pw0, ph0); // PDF Lower-Left
+  const cBottomRight = affine.forward(pw1, ph0); // PDF Lower-Right
+  const cTopRight    = affine.forward(pw1, ph1); // PDF Upper-Right
+  const cTopLeft     = affine.forward(pw0, ph1); // PDF Upper-Left
 
   const lats = [cBottomLeft.lat, cBottomRight.lat, cTopRight.lat, cTopLeft.lat];
   const lons = [cBottomLeft.lon, cBottomRight.lon, cTopRight.lon, cTopLeft.lon];
@@ -198,6 +211,11 @@ function calculatePageWorldBounds(mediaBox, bbox, gpts, gcsContext) {
       [Math.min(...lats), Math.min(...lons)],
       [Math.max(...lats), Math.max(...lons)]
     ],
+    corners: {
+      topLeft: L.latLng(cTopLeft.lat, cTopLeft.lon),
+      topRight: L.latLng(cTopRight.lat, cTopRight.lon),
+      bottomLeft: L.latLng(cBottomLeft.lat, cBottomLeft.lon)
+    },
     affine: affine
   };
 }
@@ -211,11 +229,13 @@ function toggleNudgeControls() {
   const isHidden = (nudgeBar.style.display === 'none' || !nudgeBar.style.display);
   nudgeBar.style.display = isHidden ? 'block' : 'none';
   if (isHidden && !activeOverlayBounds && currentGeoPdfLayer) {
-    const b = currentGeoPdfLayer.getBounds();
-    activeOverlayBounds = [
-      [b.getSouth(), b.getWest()],
-      [b.getNorth(), b.getEast()]
-    ];
+    const b = currentGeoPdfLayer.getBounds ? currentGeoPdfLayer.getBounds() : null;
+    if (b) {
+      activeOverlayBounds = [
+        [b.getSouth(), b.getWest()],
+        [b.getNorth(), b.getEast()]
+      ];
+    }
   }
 }
 
@@ -275,7 +295,15 @@ function applyNudgedBounds() {
   ];
 
   if (currentGeoPdfLayer && mapInstance) {
-    currentGeoPdfLayer.setBounds(nudgedBounds);
+    if (currentGeoPdfLayer.reposition && currentQuadCorners) {
+      // Rotated Quad Support
+      const tl = L.latLng(currentQuadCorners.topLeft.lat + overlayLatOffset, currentQuadCorners.topLeft.lng + overlayLonOffset);
+      const tr = L.latLng(currentQuadCorners.topRight.lat + overlayLatOffset, currentQuadCorners.topRight.lng + overlayLonOffset);
+      const bl = L.latLng(currentQuadCorners.bottomLeft.lat + overlayLatOffset, currentQuadCorners.bottomLeft.lng + overlayLonOffset);
+      currentGeoPdfLayer.reposition(tl, tr, bl);
+    } else if (currentGeoPdfLayer.setBounds) {
+      currentGeoPdfLayer.setBounds(nudgedBounds);
+    }
   }
 
   if (typeof customOverlayLayer !== 'undefined' && customOverlayLayer && mapInstance) {
@@ -379,11 +407,12 @@ async function loadGeoPDFOverlay() {
     const loadingTask = pdfjsLib.getDocument(pdfBlobUrl);
     const pdfDoc = await loadingTask.promise;
     const page = await pdfDoc.getPage(1);
-    const mediaBox = page.view;
+    const mediaBox = page.view; // [0, 0, width, height]
 
+    let pageTransform = null;
     let calculatedLeafletBounds = null;
 
-    // Scan metadata for /BBox and /GPTS tags
+    // Method 1: Scan for /BBox and /GPTS tags
     const meta = await pdfDoc.getMetadata().catch(() => ({}));
     const metaStr = JSON.stringify(meta.info || {});
 
@@ -395,15 +424,16 @@ async function loadGeoPDFOverlay() {
       const gpts = gptsMatch[1].trim().split(/[\s,]+/).map(Number);
 
       if (bbox.length === 4 && gpts.length >= 8) {
-        if (statusEl) statusEl.textContent = 'Solving affine transformation...';
-        const pageTransform = calculatePageWorldBounds(mediaBox, bbox, gpts, metaStr);
+        if (statusEl) statusEl.textContent = 'Solving true affine transformation...';
+        pageTransform = calculatePageWorldBounds(mediaBox, bbox, gpts, metaStr);
         if (pageTransform) {
           calculatedLeafletBounds = pageTransform.leafletBounds;
+          currentQuadCorners = pageTransform.corners;
         }
       }
     }
 
-    // Fallback: Scan text layer graticule coordinates
+    // Method 2: Fallback to text layer graticules
     if (!calculatedLeafletBounds) {
       if (statusEl) statusEl.textContent = 'Scanning graticules...';
       const neatlineBounds = await extractBoundsFromPageText(page);
@@ -412,6 +442,7 @@ async function loadGeoPDFOverlay() {
         const latSpan = neatlineBounds[1][0] - neatlineBounds[0][0];
         const lonSpan = neatlineBounds[1][1] - neatlineBounds[0][1];
 
+        // Standard Toposheet neatline margin ratio
         calculatedLeafletBounds = [
           [neatlineBounds[0][0] - (latSpan * 0.22), neatlineBounds[0][1] - (lonSpan * 0.035)],
           [neatlineBounds[1][0] + (latSpan * 0.04), neatlineBounds[1][1] + (lonSpan * 0.035)]
@@ -419,7 +450,7 @@ async function loadGeoPDFOverlay() {
       }
     }
 
-    // Fallback prompt for Block-II
+    // Method 3: Default fallback for Chaupal Block-II
     if (!calculatedLeafletBounds) {
       const promptCoords = prompt(
         "Notice: Geospatial tags not automatically detected.\nEnter Neatline Coordinates (MinLat, MinLon, MaxLat, MaxLon):",
@@ -465,15 +496,31 @@ async function loadGeoPDFOverlay() {
       removeGeoPDFOverlay(false);
 
       currentGeoPdfBlobUrl = URL.createObjectURL(blob);
-      currentGeoPdfLayer = L.imageOverlay(currentGeoPdfBlobUrl, calculatedLeafletBounds, {
-        opacity: 0.85,
-        interactive: true
-      }).addTo(mapInstance);
+
+      // Check if Leaflet.ImageOverlay.Rotated is available for true quad fitting
+      if (L.imageOverlay.rotated && currentQuadCorners) {
+        currentGeoPdfLayer = L.imageOverlay.rotated(
+          currentGeoPdfBlobUrl,
+          currentQuadCorners.topLeft,
+          currentQuadCorners.topRight,
+          currentQuadCorners.bottomLeft,
+          {
+            opacity: 0.85,
+            interactive: true
+          }
+        ).addTo(mapInstance);
+      } else {
+        // Standard axis-aligned rectangle fallback
+        currentGeoPdfLayer = L.imageOverlay(currentGeoPdfBlobUrl, calculatedLeafletBounds, {
+          opacity: 0.85,
+          interactive: true
+        }).addTo(mapInstance);
+      }
 
       mapInstance.fitBounds(calculatedLeafletBounds);
       showNudgeControls(calculatedLeafletBounds);
 
-      if (statusEl) statusEl.textContent = 'Ready (Avenza Model)';
+      if (statusEl) statusEl.textContent = 'Ready (Avenza Quad Model)';
       if (renderBtn) renderBtn.disabled = false;
     }, 'image/png');
 
@@ -494,6 +541,7 @@ function removeGeoPDFOverlay(showAlert = true) {
     URL.revokeObjectURL(currentGeoPdfBlobUrl);
     currentGeoPdfBlobUrl = null;
   }
+  currentQuadCorners = null;
   const fileInput = document.getElementById('geopdfFileInput');
   if (fileInput) fileInput.value = '';
   const statusEl = document.getElementById('pdfLoadingStatus');
