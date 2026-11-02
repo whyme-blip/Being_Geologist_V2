@@ -10,6 +10,7 @@ const STATIC_ASSETS = [
   './',
   './index.html',
   './manifest.json',
+  `./geopdf-engine.js?v=${APP_VERSION}`,
   `./app.js?v=${APP_VERSION}`,
   './icon-192.png',
   './icon-512.png',
