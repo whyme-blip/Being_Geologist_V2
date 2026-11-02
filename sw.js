@@ -1,7 +1,7 @@
 // =========================================================
-// VERSION DEFINITION (Bumped to v2.1 for Pako & GeoPDF Nudge)
+// VERSION DEFINITION (Bumped to v2.0 for Pako & GeoPDF Nudge)
 // =========================================================
-const APP_VERSION = 'v2.1';
+const APP_VERSION = 'v2.0';
 const CACHE_NAME = `geologger-app-${APP_VERSION}`;
 const TILE_CACHE_NAME = 'geologger-osm-tiles-v1'; // Preserved across app shell bumps
 
