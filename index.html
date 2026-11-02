@@ -13,16 +13,19 @@
   <meta name="apple-mobile-web-app-title" content="GeoLogger v2">
   <link rel="apple-touch-icon" href="icon-192.png">
 
-<!-- Leaflet CSS & JS -->
+  <!-- Leaflet CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <!-- High-Precision Rotated & Skewed Raster Overlay for Leaflet -->
+  <script src="https://unpkg.com/leaflet-imageoverlay-rotated@0.2.0/Leaflet.ImageOverlay.Rotated.js"></script>
+
   <!-- GeoTIFF & Proj4 Engine for Offline Map Sheets -->
-  <script src="https://unpkg.com/proj4"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
   <script src="https://unpkg.com/georaster"></script>
   <script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
   
-<!-- ZLIB Decompression for GeoPDF /VP and /GPTS streams -->
+  <!-- ZLIB Decompression for GeoPDF /VP and /GPTS streams -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
   
   <!-- PDF.js Engine for Client-Side GeoPDF Rendering -->
@@ -31,7 +34,7 @@
     if (window['pdfjs-dist/build/pdf']) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
-   </script>
+  </script>
   
   <style>
     :root {
@@ -483,7 +486,7 @@
         </select>
       </div>
 
-   <div id="customStructureDiv" class="form-group hidden">
+      <div id="customStructureDiv" class="form-group hidden">
         <label>Custom Structure Name</label>
         <input id="customStructure" placeholder="Enter custom type">
       </div>
@@ -551,7 +554,7 @@
         <label>Kinematic Direction</label>
         <input id="movementDir" placeholder="e.g. Top-to-SW">
       </div>
-<div class="form-group" style="justify-content: flex-end;">
+      <div class="form-group" style="justify-content: flex-end;">
         <button type="button" id="toggleLineationBtn" onclick="toggleLineationSection()" class="btn-sec btn-small" style="height: 36px;">
           ➕ Associated Lineation (Pitch / Rake)
         </button>
@@ -619,16 +622,15 @@
     <summary class="section-title">📦 3. Samples & Outcrop Observations</summary>
     <div class="grid-layout">
       <div class="form-group">
-  <label>Photo Attachment Reference</label>
-   <div style="display: flex; gap: 6px;">
-     <input id="photo" placeholder="e.g., JU-002 (1), JU-002 (2)" readonly>
-     <button type="button" onclick="document.getElementById('photoInput').click()" class="btn-sec btn-small" style="white-space: nowrap;">
-      📷 Snap/Attach
-     </button>
-   </div>
-  <!-- Added capture="environment" for rear camera & multiple to take multiple photos -->
-   <input type="file" id="photoInput" accept="image/*" capture="environment" multiple style="display:none;" onchange="handlePhotoCapture(event)">
- </div>
+        <label>Photo Attachment Reference</label>
+        <div style="display: flex; gap: 6px;">
+          <input id="photo" placeholder="e.g., JU-002 (1), JU-002 (2)" readonly>
+          <button type="button" onclick="document.getElementById('photoInput').click()" class="btn-sec btn-small" style="white-space: nowrap;">
+            📷 Snap/Attach
+          </button>
+        </div>
+        <input type="file" id="photoInput" accept="image/*" capture="environment" multiple style="display:none;" onchange="handlePhotoCapture(event)">
+      </div>
 
       <div class="form-group">
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
@@ -949,9 +951,9 @@
   </div>
 </div>
   
-<!-- GeoPDF Engine Module -->
-  <script src="geopdf-engine.js?v=v2.6"></script>
+  <!-- GeoPDF Engine Module -->
+  <script src="geopdf-engine.js?v=v2.7"></script>
   <!-- Main Application Logic -->
-  <script src="app.js?v=v2.6"></script>
+  <script src="app.js?v=v2.7"></script>
 </body>
 </html>
