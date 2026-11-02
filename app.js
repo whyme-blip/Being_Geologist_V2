@@ -1129,25 +1129,120 @@ async function extractBoundsFromPageText(page) {
   return null;
 }
 
+// =========================================================
+// OGC / ADOBE GEOSPATIAL PDF SPECIFICATION ENGINE (AVENZA MODEL)
+// =========================================================
+
+/**
+ * Computes 2D Affine Transformation parameters from Ground Control Points (GCPs):
+ * Lat = a * x + b * y + c
+ * Lon = d * x + e * y + f
+ */
+function computeAffineTransform(points) {
+  const n = points.length;
+  if (n < 3) return null;
+
+  let sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0, sumXY = 0;
+  let sumLat = 0, sumLatX = 0, sumLatY = 0;
+  let sumLon = 0, sumLonX = 0, sumLonY = 0;
+
+  for (let i = 0; i < n; i++) {
+    const { x, y, lat, lon } = points[i];
+    sumX += x;
+    sumY += y;
+    sumX2 += x * x;
+    sumY2 += y * y;
+    sumXY += x * y;
+    sumLat += lat;
+    sumLatX += lat * x;
+    sumLatY += lat * y;
+    sumLon += lon;
+    sumLonX += lon * x;
+    sumLonY += lon * y;
+  }
+
+  const det = n * (sumX2 * sumY2 - sumXY * sumXY) -
+              sumX * (sumX * sumY2 - sumY * sumXY) +
+              sumY * (sumX * sumXY - sumY * sumX2);
+
+  if (Math.abs(det) < 1e-12) return null;
+
+  const a = ((sumLatX * sumY2 - sumLatY * sumXY) * n - sumX * (sumLat * sumY2 - sumLatY * sumY) + sumY * (sumLat * sumXY - sumLatX * sumY)) / det;
+  const b = ((sumX2 * sumLatY - sumXY * sumLatX) * n - (sumX2 * sumLat - sumX * sumLatX) * sumY + sumX * (sumXY * sumLat - sumX * sumLatY)) / det;
+  const c = (sumLat - a * sumX - b * sumY) / n;
+
+  const d = ((sumLonX * sumY2 - sumLonY * sumXY) * n - sumX * (sumLon * sumY2 - sumLonY * sumY) + sumY * (sumLon * sumXY - sumLonX * sumY)) / det;
+  const e = ((sumX2 * sumLonY - sumXY * sumLonX) * n - (sumX2 * sumLon - sumX * sumLonX) * sumY + sumX * (sumXY * sumLon - sumX * sumLonY)) / det;
+  const f = ((sumLon - d * sumX - e * sumY)) / n;
+
+  return {
+    forward: (x, y) => ({
+      lat: a * x + b * y + c,
+      lon: d * x + e * y + f
+    })
+  };
+}
+
+/**
+ * Extrapolates the neatline coordinates to the 4 outer page corners (MediaBox),
+ * allowing the entire uncropped sheet (with legend & collar) to render in true WGS84 coordinates.
+ */
+function calculatePageWorldBounds(mediaBox, bbox, gpts, gcsContext) {
+  const pw0 = mediaBox[0], ph0 = mediaBox[1], pw1 = mediaBox[2], ph1 = mediaBox[3];
+  const bx0 = bbox[0], by0 = bbox[1], bx1 = bbox[2], by1 = bbox[3];
+
+  const wgsGpts = [];
+  for (let i = 0; i < gpts.length; i += 2) {
+    const pt = projectToWGS84(gpts[i + 1], gpts[i], gcsContext);
+    wgsGpts.push({ lat: pt[0], lon: pt[1] });
+  }
+
+  // Associate the 4 neatline corners (PDF order: lower-left, lower-right, upper-right, upper-left)
+  const gcp = [
+    { x: bx0, y: by0, lat: wgsGpts[0].lat, lon: wgsGpts[0].lon },
+    { x: bx1, y: by0, lat: wgsGpts[1].lat, lon: wgsGpts[1].lon },
+    { x: bx1, y: by1, lat: wgsGpts[2].lat, lon: wgsGpts[2].lon },
+    { x: bx0, y: by1, lat: wgsGpts[3].lat, lon: wgsGpts[3].lon }
+  ];
+
+  const affine = computeAffineTransform(gcp);
+  if (!affine) return null;
+
+  // Project all four actual outer page corners
+  const cBottomLeft  = affine.forward(pw0, ph0);
+  const cBottomRight = affine.forward(pw1, ph0);
+  const cTopRight    = affine.forward(pw1, ph1);
+  const cTopLeft     = affine.forward(pw0, ph1);
+
+  const lats = [cBottomLeft.lat, cBottomRight.lat, cTopRight.lat, cTopLeft.lat];
+  const lons = [cBottomLeft.lon, cBottomRight.lon, cTopRight.lon, cTopLeft.lon];
+
+  return {
+    leafletBounds: [
+      [Math.min(...lats), Math.min(...lons)], // SW full-page edge
+      [Math.max(...lats), Math.max(...lons)]  // NE full-page edge
+    ],
+    affine: affine
+  };
+}
+
 function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
   try {
     const bytes = new Uint8Array(rawBuffer);
     const textDecoder = new TextDecoder('latin1');
 
-    // 1. Check uncompressed raw text
     const fullText = textDecoder.decode(bytes);
     const rawGpts = scanTextForGpts(fullText);
     if (rawGpts) return rawGpts;
 
-    // 2. Scan and decompress FlateDecode streams using Pako
     if (typeof pako !== 'undefined') {
       let pos = 0;
-      const maxScan = Math.min(bytes.length, 12000000); // 12MB limit for mobile
+      const maxScan = Math.min(bytes.length, 12000000);
 
       while (pos < maxScan - 10) {
         let streamStart = -1;
         for (let i = pos; i < maxScan - 6; i++) {
-          if (bytes[i] === 115 && bytes[i+1] === 116 && bytes[i+2] === 114 && bytes[i+3] === 101 && bytes[i+4] === 97 && bytes[i+5] === 109) { // 'stream'
+          if (bytes[i] === 115 && bytes[i+1] === 116 && bytes[i+2] === 114 && bytes[i+3] === 101 && bytes[i+4] === 97 && bytes[i+5] === 109) {
             streamStart = i + 6;
             if (bytes[streamStart] === 13) streamStart++;
             if (bytes[streamStart] === 10) streamStart++;
@@ -1159,7 +1254,7 @@ function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
 
         let streamEnd = -1;
         for (let i = streamStart; i < Math.min(maxScan - 9, streamStart + 1500000); i++) {
-          if (bytes[i] === 101 && bytes[i+1] === 110 && bytes[i+2] === 100 && bytes[i+3] === 115) { // 'ends'
+          if (bytes[i] === 101 && bytes[i+1] === 110 && bytes[i+2] === 100 && bytes[i+3] === 115) {
             streamEnd = i;
             break;
           }
@@ -1170,16 +1265,13 @@ function extractGeoPdfCoordinatesFromBinary(rawBuffer) {
           continue;
         }
 
-        // CRITICAL: bytes.slice() makes an independent copy, preventing detached memory conflicts
         const streamChunk = bytes.slice(streamStart, streamEnd);
         try {
           const inflated = pako.inflate(streamChunk);
           const decompressedText = textDecoder.decode(inflated);
           const bounds = scanTextForGpts(decompressedText);
           if (bounds) return bounds;
-        } catch (err) {
-          // Stream is not zlib or is an image/font stream — continue
-        }
+        } catch (err) {}
 
         pos = streamEnd + 9;
       }
@@ -1314,6 +1406,7 @@ function resetOverlayNudge() {
   localStorage.removeItem(`overlayOffset_${activeProjectId}`);
   applyNudgedBounds();
 }
+
 // ==========================================
 // DRAGGABLE HUD HANDLER (MOUSE & TOUCH)
 // ==========================================
@@ -1326,7 +1419,6 @@ function makeNudgeHudDraggable() {
   let startX, startY, initialLeft, initialTop;
 
   function onPointerDown(e) {
-    // Only drag when interacting with the handle or title area, not child buttons/sliders
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') return;
 
     isDragging = true;
@@ -1342,7 +1434,6 @@ function makeNudgeHudDraggable() {
     initialLeft = rect.left - parentRect.left;
     initialTop = rect.top - parentRect.top;
 
-    // Remove translateX centering once dragged
     hud.style.transform = 'none';
     hud.style.left = `${initialLeft}px`;
     hud.style.top = `${initialTop}px`;
@@ -1355,7 +1446,7 @@ function makeNudgeHudDraggable() {
 
   function onPointerMove(e) {
     if (!isDragging) return;
-    if (e.cancelable) e.preventDefault(); // Prevent accidental map panning during HUD drag
+    if (e.cancelable) e.preventDefault();
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
@@ -1379,6 +1470,9 @@ function makeNudgeHudDraggable() {
   handle.addEventListener('touchstart', onPointerDown, { passive: true });
 }
 
+// =========================================================
+// AVENZA-COMPLIANT GEOPDF RENDERER
+// =========================================================
 async function loadGeoPDFOverlay() {
   const fileInput = document.getElementById('geopdfFileInput');
   const file = fileInput ? fileInput.files[0] : null;
@@ -1398,54 +1492,94 @@ async function loadGeoPDFOverlay() {
     return;
   }
 
-  // Use Blob URL for PDF.js (eliminates the detached ArrayBuffer crash completely)
   const pdfBlobUrl = URL.createObjectURL(file);
 
   try {
-    if (statusEl) statusEl.textContent = 'Reading GeoPDF...';
+    if (statusEl) statusEl.textContent = 'Parsing GeoPDF dictionaries...';
     if (renderBtn) renderBtn.disabled = true;
 
-    // 1. Read buffer strictly for Pako stream extraction in main thread
-    const rawBuffer = await file.arrayBuffer();
-
-    if (statusEl) statusEl.textContent = 'Decompressing /GPTS tags...';
-    let bounds = extractGeoPdfCoordinatesFromBinary(rawBuffer);
-
-    // 2. Load PDF.js via Blob URL so its Web Worker never touches rawBuffer
+    // Load PDF via Object URL to preserve worker stream isolation
     const loadingTask = pdfjsLib.getDocument(pdfBlobUrl);
     const pdfDoc = await loadingTask.promise;
     const page = await pdfDoc.getPage(1);
+    const mediaBox = page.view; // [0, 0, width, height] in PDF points
 
-    // 3. Fallback: text layer scan if /GPTS dictionary was not present
-    if (!bounds) {
-      bounds = await extractBoundsFromPageText(page);
-    }
+    let calculatedLeafletBounds = null;
 
-    // 4. Fallback: manual coordinate prompt if both scans found nothing
-    if (!bounds) {
-      const promptCoords = prompt(
-        "Notice: Geospatial tags not automatically detected.\n\nEnter Bounding Box (MinLat, MinLon, MaxLat, MaxLon):\nFor Block-II (Chaupal/Nerwa), paste:\n30.833333, 77.516667, 30.983333, 77.750000"
-      );
-      if (promptCoords) {
-        const parts = promptCoords.split(/[\s,]+/).map(Number);
-        if (parts.length === 4 && parts.every(n => !isNaN(n))) {
-          bounds = [[parts[0], parts[1]], [parts[2], parts[3]]];
+    // 1. Inspect metadata for OGC/Adobe /BBox and /GPTS
+    const meta = await pdfDoc.getMetadata().catch(() => ({}));
+    const metaStr = JSON.stringify(meta.info || {});
+
+    const bboxMatch = metaStr.match(/\/BBox\s*\[\s*([0-9.,\s-]+)\s*\]/i);
+    const gptsMatch = metaStr.match(/\/GPTS\s*\[\s*([0-9.,\s-]+)\s*\]/i);
+
+    if (bboxMatch && gptsMatch) {
+      const bbox = bboxMatch[1].trim().split(/[\s,]+/).map(Number);
+      const gpts = gptsMatch[1].trim().split(/[\s,]+/).map(Number);
+
+      if (bbox.length === 4 && gpts.length >= 8) {
+        if (statusEl) statusEl.textContent = 'Solving page affine transformation...';
+        const pageTransform = calculatePageWorldBounds(mediaBox, bbox, gpts, metaStr);
+        if (pageTransform) {
+          calculatedLeafletBounds = pageTransform.leafletBounds;
         }
       }
     }
 
-    if (!bounds) {
+    // 2. Fallback: Parse neatline graticule text & extrapolate to MediaBox
+    if (!calculatedLeafletBounds) {
+      if (statusEl) statusEl.textContent = 'Scanning graticule margins...';
+      const neatlineBounds = await extractBoundsFromPageText(page);
+
+      if (neatlineBounds) {
+        // Standard GSI / Toposheet layout extrapolation:
+        // Neatline covers ~93% horizontal width and ~74% vertical height (legend takes bottom 22%)
+        const latSpan = neatlineBounds[1][0] - neatlineBounds[0][0];
+        const lonSpan = neatlineBounds[1][1] - neatlineBounds[0][1];
+
+        const fullPageMinLat = neatlineBounds[0][0] - (latSpan * 0.22);
+        const fullPageMaxLat = neatlineBounds[1][0] + (latSpan * 0.04);
+        const fullPageMinLon = neatlineBounds[0][1] - (lonSpan * 0.035);
+        const fullPageMaxLon = neatlineBounds[1][1] + (lonSpan * 0.035);
+
+        calculatedLeafletBounds = [
+          [fullPageMinLat, fullPageMinLon],
+          [fullPageMaxLat, fullPageMaxLon]
+        ];
+      }
+    }
+
+    // 3. Fallback prompt: Extrapolate manual input to full page dimensions
+    if (!calculatedLeafletBounds) {
+      const promptCoords = prompt(
+        "Notice: Automatic viewport not detected.\nEnter Neatline Coordinates (MinLat, MinLon, MaxLat, MaxLon):\nDefault for Chaupal Block-II:",
+        "30.833333, 77.516667, 30.983333, 77.750000"
+      );
+      if (promptCoords) {
+        const p = promptCoords.split(/[\s,]+/).map(Number);
+        if (p.length === 4 && p.every(n => !isNaN(n))) {
+          const latSpan = p[2] - p[0];
+          const lonSpan = p[3] - p[1];
+          calculatedLeafletBounds = [
+            [p[0] - (latSpan * 0.22), p[1] - (lonSpan * 0.035)],
+            [p[2] + (latSpan * 0.04), p[3] + (lonSpan * 0.035)]
+          ];
+        }
+      }
+    }
+
+    if (!calculatedLeafletBounds) {
       if (statusEl) statusEl.textContent = '';
       if (renderBtn) renderBtn.disabled = false;
       URL.revokeObjectURL(pdfBlobUrl);
-      alert("Could not extract geographic bounds.");
+      alert("Could not register spatial bounds.");
       return;
     }
 
-    if (statusEl) statusEl.textContent = 'Rasterizing Page 1...';
+    if (statusEl) statusEl.textContent = 'Rasterizing high-res sheet...';
 
-    // 5. Render Page 1
-    const viewport = page.getViewport({ scale: 1.5 });
+    // 2.0x scale ensures crystal clear 25k/50k contours and structural symbols
+    const viewport = page.getViewport({ scale: 2.0 });
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = viewport.width;
@@ -1456,32 +1590,30 @@ async function loadGeoPDFOverlay() {
       viewport: viewport
     }).promise;
 
-    // Release blob URL from memory
     URL.revokeObjectURL(pdfBlobUrl);
 
-    // 6. Add as Leaflet image overlay
+    // Bind full, uncropped page to Leaflet using the extrapolated MediaBox coordinates
     canvas.toBlob(blob => {
       removeGeoPDFOverlay(false);
 
       currentGeoPdfBlobUrl = URL.createObjectURL(blob);
-      currentGeoPdfLayer = L.imageOverlay(currentGeoPdfBlobUrl, bounds, {
+      currentGeoPdfLayer = L.imageOverlay(currentGeoPdfBlobUrl, calculatedLeafletBounds, {
         opacity: 0.85,
         interactive: true
       }).addTo(mapInstance);
 
-      mapInstance.fitBounds(bounds);
-      showNudgeControls(bounds);
+      mapInstance.fitBounds(calculatedLeafletBounds);
+      showNudgeControls(calculatedLeafletBounds);
 
-      if (statusEl) statusEl.textContent = 'Ready';
+      if (statusEl) statusEl.textContent = 'Ready (Avenza Model)';
       if (renderBtn) renderBtn.disabled = false;
-      alert(`GeoPDF Map successfully overlaid!\nBounds: ${bounds[0][0].toFixed(5)}, ${bounds[0][1].toFixed(5)} to ${bounds[1][0].toFixed(5)}, ${bounds[1][1].toFixed(5)}`);
     }, 'image/png');
 
   } catch (err) {
     URL.revokeObjectURL(pdfBlobUrl);
     if (statusEl) statusEl.textContent = '';
     if (renderBtn) renderBtn.disabled = false;
-    alert("GeoPDF Load Error: " + err.message);
+    alert("GeoPDF Engine Error: " + err.message);
   }
 }
 
