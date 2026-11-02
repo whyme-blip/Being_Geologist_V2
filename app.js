@@ -19,12 +19,7 @@ let customOverlayLayer = null;
 let currentOverlayUrl = null;
 let currentGeoTiffLayer = null;
 
-// GeoPDF Layer & Nudge State
-let currentGeoPdfLayer = null;
-let currentGeoPdfBlobUrl = null;
-let activeOverlayBounds = null;
-let overlayLatOffset = 0;
-let overlayLonOffset = 0;
+// (Note: GeoPDF layer & calibration state variables are isolated in geopdf-engine.js)
 
 // Live GPS Blue Dot Handles
 let liveLocationMarker = null;
@@ -1014,9 +1009,8 @@ function exportTrackGeoJSON() {
 
 // ==========================================
 // 12. OFFLINE MAP OVERLAYS (GEOTIFF / KML / IMAGE)
-// (GeoPDF Engine has been modularized into geopdf-engine.js)
+// (All GeoPDF logic is managed inside geopdf-engine.js)
 // ==========================================
-
 function loadGeoTIFFOverlay() {
   const fileInput = document.getElementById('geotiffFileInput');
   const file = fileInput ? fileInput.files[0] : null;
@@ -1562,7 +1556,7 @@ document.addEventListener('DOMContentLoaded', () => {
   render();
   updatePreview();
 
-  // Initialize Drag & Touch functionality on the Nudge HUD
+  // Initialize Drag & Touch functionality on the Nudge HUD from geopdf-engine.js
   if (typeof makeNudgeHudDraggable === 'function') {
     makeNudgeHudDraggable();
   }
